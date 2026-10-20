@@ -1,0 +1,19 @@
+{
+ "name": "tgmsg",
+ "description": "TG精确读单条消息(修复私有群embed墙/内置tg无法按ID抠单条)。按消息ID get_message返回发送者/时间/正文/媒体/按钮,可选raw拿完整JSON。参数格式: '群名或ID:消息ID[:raw]' (默认wang账号) 或 'acct2:群:消息ID[:raw]' 指定账号, 或 'acct=acct1 group=现金红包 id=3570 raw=1' 键值式。例: 现金红包:3570  → 读群'现金红包'消息3570。例: 现金红包:3570:raw → 完整JSON含按钮startapp。返回带TGMSG头。适用于私有群/私密频道/群聊任意单条.",
+ "schema": {
+  "type": "object",
+  "properties": {
+   "q": {
+    "type": "string",
+    "description": "目标串, 格式 '群:消息ID[:raw]' 或 'acct2:群:id[:raw]'"
+   }
+  },
+  "required": [
+   "q"
+  ]
+ },
+ "exec": "/opt/deepseek-bot/knowledge/toolPlugins/tgmsg.py",
+ "timeout": 120,
+ "admin_only": true
+}

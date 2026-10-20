@@ -1,0 +1,11 @@
+{
+ "name": "b64tool",
+ "description": "base64解码工具",
+ "schema": {
+  "type": "object",
+  "properties": {}
+ },
+ "exec": "/opt/deepseek-bot/knowledge/toolPlugins/b64tool.py",
+ "admin_only": true,
+ "timeout": 60
+}
