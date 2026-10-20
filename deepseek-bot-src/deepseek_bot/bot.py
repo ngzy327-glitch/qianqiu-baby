@@ -11138,6 +11138,50 @@ async def main():
       except Exception as _be:
           print(f"[补录] 失败: {_be}")
 
+    # 2026-10-21 白名单门禁: 只有 OK 名单(主人 + /grant 授权的人)能用; 其余在事件入口直接拦掉。
+    #   私聊: 回一句"未授权"; 群聊普通消息放行(只做收录/群管, AI 段内部再拦); 群内命令/按钮直接丢弃。
+    #   新增的授权即时生效(gate 每次读实时 OK 集合, /grant 不用重启)。
+    _DENY_TS = {}
+    _orig_on = client.on
+
+    def _gate_on(*_a, **_kw):
+        _deco = _orig_on(*_a, **_kw)
+
+        def _wrap(_cb):
+            async def _gated(_e):
+                try:
+                    _gu = getattr(_e, "sender_id", None)
+                    if _gu is not None and int(_gu) not in OK:
+                        _is_cb = isinstance(_e, events.CallbackQuery)
+                        _is_grp = bool(getattr(_e, "is_group", False))
+                        _is_cmd = (not _is_cb) and (getattr(_e, "raw_text", "") or "").strip().startswith(("/", "!"))
+                        if _is_cb:
+                            try: await _e.answer("🔒 未授权：请联系管理员开通", alert=True)
+                            except Exception: pass
+                            return
+                        if _is_grp and not _is_cmd:
+                            return await _cb(_e)      # 群聊普通消息: 放行给群管/收录, 不进入 AI
+                        if not getattr(_e, "_dsb_denied", False):
+                            setattr(_e, "_dsb_denied", True)
+                            print(f"[deny] 未授权 uid={_gu} chat={getattr(_e, 'chat_id', None)}", flush=True)
+                            if not _is_grp:
+                                _now_d = time.time()
+                                if _now_d - _DENY_TS.get(int(_gu), 0) > 600:
+                                    _DENY_TS[int(_gu)] = _now_d
+                                    try:
+                                        await _e.reply("🔒 <b>未授权</b>\n\n本机器人仅对授权用户开放，请联系管理员开通。",
+                                                       parse_mode="HTML")
+                                    except Exception: pass
+                        return
+                except Exception as _ge9:
+                    print(f"[gate] 异常: {str(_ge9)[:120]}", flush=True)
+                return await _cb(_e)
+            _gated.__name__ = getattr(_cb, "__name__", "gated")
+            return _deco(_gated)
+        return _wrap
+
+    client.on = _gate_on
+
     _stopped={}; _last_msg_time={}
     @client.on(events.CallbackQuery(data=b"stop"))
     async def stop_cb(cb):
@@ -12340,7 +12384,10 @@ async def main():
         OK.add(_uid_g)
         _ok_save()
         globals().setdefault('_normal_mode', {}).pop(_uid_g, None)
-        await e.reply(f"{_px('✅')} 已给 <code>{_uid_g}</code> 提权, 现在可以使用管理功能\n当前管理员: <b>{len(OK)}</b> 人", parse_mode="HTML")
+        try:      # 立即给新授权的人挂上 Mini App 菜单按钮(不用等重启)
+            await _set_miniapp_menu(_miniapp_stamp())
+        except Exception: pass
+        await e.reply(f"{_px('✅')} 已给 <code>{_uid_g}</code> 提权, 对方现在可以使用机器人\n当前授权人数: <b>{len(OK)}</b> 人", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:revoke|降权|取消授权)(?:\s+(\d+))?$"))
     async def _(e):
@@ -13627,6 +13674,10 @@ async def main():
                 # 2026-09-11 打上"为什么不回": 群里没@也没喊名字 → 只收录不回复(设计如此, 不是卡住)
                 print(f"[skip] 群消息未@未喊名, 只收录不回复(chat={e.chat_id}) text={t0[:40]!r}", flush=True)
                 return
+        # 2026-10-21 白名单门禁(群): 未授权用户即使 @bot 也不进入 AI 流程(收录/群管已在上面执行)
+        if u not in OK:
+            print(f"[deny] 未授权群内调用 uid={u} chat={e.chat_id}", flush=True)
+            return
         # 并发锁: 按 uid+chat(+话题) 粒度（私聊与各群独立, 各话题也各自独立可并行），超过10分钟视为过期
         _ckey9 = _tkey(e.chat_id)   # 2026-09-14: 话题里= "chat:话题号", 所以不同话题能同时跑任务
         _bk=(u,_ckey9)
