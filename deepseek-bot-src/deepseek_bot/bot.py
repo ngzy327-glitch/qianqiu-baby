@@ -826,8 +826,8 @@ def _api_cur():
 #   选择落盘 model_switch.json: {"prov":"mlxz","model":"","light":"","pro":""}
 _PROV = {
     # 2026-10-03 老板「失效了就删除」: 中站·GLM(mlxz) 的 key 已 Invalid token → 整条通道删掉
-    "dp":   {"name": "DeepSeek官方", "api": os.getenv("DP_API", "https://api.deepseek.com/v1"),
-             "key": os.getenv("DP_API_KEY", ""),
+    "dp":   {"name": "DeepSeek官方", "api": os.getenv("DP_API") or os.getenv("DEEPSEEK_API", "https://api.deepseek.com/v1"),
+             "key": os.getenv("DP_API_KEY") or os.getenv("DEEPSEEK_API_KEY", ""),
              "main": os.getenv("DP_MODEL_MAIN", "deepseek-flash"),
              "light": os.getenv("DP_MODEL_LIGHT", "deepseek-flash"),
              "pro": os.getenv("DP_MODEL_PRO", "deepseek-v4-pro"),
