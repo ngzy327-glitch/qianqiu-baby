@@ -224,6 +224,8 @@ class AntiForensicsEngine:
 
     def _exec_single(self, target, credential, keyfile, cmd, name) -> CleanResult:
         if target:
+            if not tool_installed("ssh"):
+                return CleanResult(name, "not_installed", "ssh 未安装: apt install openssh-client")
             full = self._build_ssh(target, credential, keyfile) + f" '{cmd}'"
         else:
             full = cmd
@@ -239,6 +241,9 @@ class AntiForensicsEngine:
 
     def _run_windows(self, target, credential, cmds) -> List[CleanResult]:
         results = []
+        if target and not tool_installed("evil-winrm"):
+            return [CleanResult("windows_clean", "not_installed",
+                                "evil-winrm 未安装: gem install evil-winrm")]
         for c in cmds:
             if target:
                 full = f"evil-winrm -i {target} "
@@ -261,8 +266,11 @@ class AntiForensicsEngine:
         if keyfile:
             cmd += f"-i {keyfile} "
         if credential and ":" in credential:
-            u, _ = credential.split(":", 1)
+            u, pw = credential.split(":", 1)
             cmd += f"{u}@{target} "
+            # sshpass 传密码
+            if not keyfile and tool_installed("ssh"):
+                cmd = f"sshpass -p '{pw}' " + cmd
         else:
             cmd += f"{target} "
         return cmd

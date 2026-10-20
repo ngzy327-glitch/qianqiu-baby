@@ -294,6 +294,8 @@ class PersistenceEngine:
 
     def detect_linux(self, target: str, credential: str = "", keyfile: str = "") -> Dict:
         """检测 Linux 已有持久化痕迹"""
+        if not tool_installed("ssh"):
+            return {"status": "not_installed", "hint": "安装: apt install openssh-client"}
         checks = {
             "crontab": "crontab -l 2>/dev/null",
             "cron_d": "ls -la /etc/cron.d/ 2>/dev/null; cat /etc/crontab 2>/dev/null",
@@ -304,8 +306,9 @@ class PersistenceEngine:
             "ld_preload": "cat /etc/ld.so.preload 2>/dev/null",
             "motd": "ls -la /etc/update-motd.d/ 2>/dev/null",
             "at_jobs": "atq 2>/dev/null",
+            "lsmod_rootkit": "lsmod 2>/dev/null | head -20",
         }
-        results = {}
+        results = {"status": "ok"}
         ssh_cmd = f"ssh -o StrictHostKeyChecking=no "
         if keyfile:
             ssh_cmd += f"-i {keyfile} {target} "
@@ -314,12 +317,49 @@ class PersistenceEngine:
             ssh_cmd += f"{u}@{target} "
         else:
             ssh_cmd += f"{target} "
+        # sshpass 传密码
+        if credential and ":" in credential and not keyfile:
+            _, pw = credential.split(":", 1)
+            ssh_cmd = f"sshpass -p '{pw}' " + ssh_cmd
         for name, cmd in checks.items():
             try:
                 r = subprocess.run(ssh_cmd + f"'{cmd}'", shell=True, capture_output=True, text=True, timeout=15)
                 out = (r.stdout + r.stderr).strip()
                 if out:
                     results[name] = out[:300]
+            except Exception as e:
+                results[name] = f"error: {e}"
+        return results
+
+    def detect_windows(self, target: str, credential: str = "") -> Dict:
+        """检测 Windows 已有持久化痕迹"""
+        if not tool_installed("evil-winrm"):
+            return {"status": "not_installed",
+                    "hint": "安装: gem install evil-winrm"}
+        checks = {
+            "run_keys": 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" 2>nul',
+            "run_hklm": 'reg query "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" 2>nul',
+            "runonce": 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce" 2>nul',
+            "scheduled_tasks": 'schtasks /query /fo LIST 2>nul | findstr /i "TaskName Status"',
+            "services": 'sc query state= all 2>nul | findstr /i "SERVICE_NAME"',
+            "startup_folder": 'dir "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup" 2>nul',
+            "sticky_keys": 'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe" 2>nul',
+            "ifeo": 'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options" 2>nul | findstr Debugger',
+            "winlogon": 'reg query "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Userinit 2>nul',
+            "wmi_events": 'powershell -c "Get-WmiObject -Namespace root\\subscription -Class __EventFilter" 2>nul',
+        }
+        results = {"status": "ok"}
+        ew_base = f"evil-winrm -i {target} "
+        if credential and ":" in credential:
+            u, p = credential.split(":", 1)
+            ew_base += f"-u {u} -p {p} "
+        for name, cmd in checks.items():
+            try:
+                full = ew_base + f"-e '{cmd}'"
+                r = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=20)
+                out = (r.stdout + r.stderr).strip()
+                if out and "not found" not in out.lower():
+                    results[name] = out[:500]
             except Exception as e:
                 results[name] = f"error: {e}"
         return results
@@ -388,3 +428,13 @@ def persist_deploy(target: str, method: str, os_type: str = "linux",
         return eng.deploy_linux(target, p, credential=credential)
     else:
         return eng.deploy_windows(target, p, credential=credential)
+
+
+def persist_detect_linux(target: str, credential: str = "", keyfile: str = "") -> Dict:
+    """检测 Linux 持久化痕迹"""
+    return PersistenceEngine().detect_linux(target, credential, keyfile)
+
+
+def persist_detect_windows(target: str, credential: str = "") -> Dict:
+    """检测 Windows 持久化痕迹"""
+    return PersistenceEngine().detect_windows(target, credential)
