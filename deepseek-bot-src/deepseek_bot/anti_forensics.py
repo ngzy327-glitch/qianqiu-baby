@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from enum import Enum
 
+from .tools_manager import tool_installed
+
 
 class CleanTarget(Enum):
     HISTORY = "history"
@@ -163,7 +165,11 @@ class AntiForensicsEngine:
     def shred_file(self, filepath: str, target: str = "",
                    credential: str = "", keyfile: str = "") -> CleanResult:
         """安全删除文件(3次覆盖)"""
-        cmd = f"shred -u -z -n 3 {filepath} 2>/dev/null || (dd if=/dev/urandom of={filepath} bs=1M count=1 2>/dev/null; rm -f {filepath})"
+        if tool_installed("shred"):
+            cmd = f"shred -u -z -n 3 {filepath} 2>/dev/null"
+        else:
+            # 回退: dd 覆盖 + rm
+            cmd = f"dd if=/dev/urandom of={filepath} bs=1M count=1 2>/dev/null; rm -f {filepath}"
         return self._exec_single(target, credential, keyfile, cmd, "file_shred")
 
     # ============ Windows ============
