@@ -4515,7 +4515,7 @@ def _home_card(uid):
         f"<code>/start</code> 本菜单 · <code>/bg</code> 后台任务 · <code>/model</code> 模型+推理等级\n"
         f"<code>/stop</code> 停当前任务 · <code>/clear</code> 清历史 · <code>/ctx</code> 上下文占用\n"
         f"<code>/thinking</code> 思考开关 · <code>/talkshow</code> 过程播报 · <code>/mod</code> 群管\n\n"
-        f"{_px('🔋')} " + (f"额外次数: <b>{_pay_balance(uid)} 次</b>" if (uid not in OK and _pay_balance(uid) > 0) else f"今日免费额度: <b>{_n_h}/50</b> 条") + ("<i>(管理员不限)</i>" if uid in OK else "") + "\n\n"
+        f"{_px('🔋')} " + f"今日已用: <b>{_n_h}</b> 条(不限量)" + ("<i>(管理员)</i>" if uid in OK else "") + "\n\n"
         f"{_px('👨💻')} 开发者: <a href=\"{_DEV_URL}\">@{_DEV_HANDLE}</a> · 有问题直接找他\n"
         f"{_px('👇')} 点下面的按钮:"
     )
@@ -7982,9 +7982,7 @@ def _trigger_knowledge(text: str, uid: int = 0) -> str:
     except Exception: pass
     return "\n\n".join(_out)
 
-# ===== 免费用户每日额度(2026-08-30): token+条数双记账, 管理员不限 =====
-_QUOTA_DAILY_T = 1250000  # 每日免费token上限(125万≈50条口径, 防单条极贵时提前拦截; 条数是主闸)
-_QUOTA_DAILY_N = 50       # 每日免费条数上限(1条=一条用户消息的首轮)
+# ===== 用量统计(不限量): token+条数仅记账, 不做拦截 =====
 _QUOTA_CONN = None
 def _quota_db():
     global _QUOTA_CONN
@@ -8072,7 +8070,7 @@ def _usage_card(uid):
         _lines = [
             f"{_px('💰')} <b>API key 余额</b>: {_hesc(_bal)}" + ("" if _ok else " ⚠️"),
             f"   · 今日消耗: <b>{_tk:,}</b> token · <b>{_msgs}</b> 条"
-            f"（免费额度 {_QUOTA_DAILY_N} 条 / {_QUOTA_DAILY_T:,} token）",
+            f"（不限量）",
             f"   · 管理员授予的额外次数: <b>{_pay}</b> 次（优先扣, 不占日额）",
             f"   · 当前模型: <b>{_hesc(str(_model_light()))}</b>（轻） / <b>{_hesc(str(MODEL_PRO))}</b>（重）",
         ]
@@ -11297,7 +11295,7 @@ async def main():
                 _doc_h2 = (
                     f"🤖 <b>{_BOT_BRAND} · 对话引擎 API</b>\n\n"
                     f"<b>Base URL:</b> <code>http://YOUR_SERVER_IP/v1</code>\n"
-                    f"<b>API Key:</b> <code>sk-xxxx</code> — 每日免费额度, 管理员可额外授权\n\n"
+                    f"<b>API Key:</b> <code>sk-xxxx</code> — 不限量使用\n\n"
                     f"点下面按钮看各接入方式:\n"
                     f"💡 1 次请求=1 次 · 带记忆 · 脾气火爆"
                 )
@@ -11341,7 +11339,7 @@ async def main():
             _doc_h2 = (
                 f"🤖 <b>{_BOT_BRAND} · 对话引擎 API</b>\n\n"
                 f"<b>Base URL:</b> <code>http://YOUR_SERVER_IP/v1</code>\n"
-                f"<b>API Key:</b> <code>sk-xxxx</code> — 每日免费额度, 管理员可额外授权\n\n"
+                f"<b>API Key:</b> <code>sk-xxxx</code> — 不限量使用\n\n"
                 f"点下面按钮看各接入方式:\n"
                 f"💡 1 次请求=1 次 · 带记忆 · 脾气火爆"
             )
@@ -11386,9 +11384,9 @@ async def main():
                 f"🔑 <b>你的 API Key</b>\n\n"
                 f"<code>{_key_g}</code>\n\n"
                 f"· 绑定账号: (TG {_uid_k})\n"
-                f"· 当前余额: <b>{_bal_k} 次</b> (或每日免费50条)\n"
+                f"· 使用额度: <b>不限量</b>\n"
                 f"· Base URL: <code>http://YOUR_SERVER_IP/v1</code> · 模型名 <code>whale</code>\n\n"
-                f"⚠️ 别分享出去, 生成记录=扣你的次数"
+                f"⚠️ 别分享出去, 别人用你的 Key 记账到你头上"
             )
             _btns_k = [[Button.inline("🏠 主页", b"home"), Button.inline("🔄 重新生成Key", b"mykey:regen")],[Button.inline("📋 接入教程", b"apidoc:home")]]
             try:
@@ -12323,7 +12321,7 @@ async def main():
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:pay|收款|收钱)(?:\s+.*)?$"))
     async def _(e):
         """收款/会员功能已关闭(用户要求不再卖会员)"""
-        await e.reply(f"{_px('🔋')} 收款与会员功能已关闭, 仅保留每日免费额度。", parse_mode="HTML")
+        await e.reply(f"{_px('🔋')} 收款与会员功能已关闭, 所有用户不限量使用。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/emoji(?:\s+(-?\d+)\s+(on|off|开|关))?$"))
     async def _(e):
@@ -13090,8 +13088,7 @@ async def main():
         if u not in OK:
             # 非管理员只给"自己今天的用量", 余额属于账号级信息不外泄
             _tk, _msgs = _quota_today(u)
-            await e.reply(f"{_px('📊')} 今日用量: <b>{_tk:,}</b> token · <b>{_msgs}</b> 条"
-                          f"（免费额度 {_QUOTA_DAILY_N} 条/天）", parse_mode="HTML")
+            await e.reply(f"{_px('📊')} 今日用量: <b>{_tk:,}</b> token · <b>{_msgs}</b> 条（不限量）", parse_mode="HTML")
             return
         _txt = _usage_card(u)
         await e.reply(_txt + f"\n\n<i>用法: /balance（加 raw 看接口原始返回）</i>", parse_mode="HTML")
@@ -13900,30 +13897,7 @@ async def main():
         # 私聊: 非管理员放行但进普通模式（无危险工具，is_normal 在后面判断）
         if not e.is_group and not _is_admin:
             globals().setdefault('_normal_mode', {}).setdefault(u, True)  # 强制普通模式
-        # 次数/额度检查(普通用户): 付费余额>0 优先扣1次(永久累计,不占日额); 否则走每日免费额度
-        if u not in OK:
-            if _pay_balance(u) > 0:
-                _pay_spend(u)
-            else:
-                _tk_t, _tm_t = _quota_today(u)
-                if _tk_t >= _QUOTA_DAILY_T or _tm_t >= _QUOTA_DAILY_N:
-                    # 超限提示节流: 每天只弹一次, 之后静默丢弃(防反复刷屏劝买)
-                    _qa = globals().setdefault('_quota_alerted', {})
-                    if _qa.get(u) != time.strftime("%Y-%m-%d"):
-                        _qa[u] = time.strftime("%Y-%m-%d")
-                        try:
-                            await _send_gate()
-                            _html_q = ("🔋 <b>今日免费额度已用完(50/50)</b>\n\n"
-                                       f"⏰ <b>重置:</b> 北京时间每天 <b>0:00</b> 自动恢复\n"
-                                       f"💡 有需要可联系管理员 @YOUR_ACCOUNT")
-                            try:
-                                await asyncio.to_thread(_send_kb, e.chat_id, _html_q,
-                                         [[_b("返回主页", "home", style="success", icon="💍")],
-                                          [_b("返回主页", "home", style="primary", icon="🏠")]], reply_to=e.id)
-                            except Exception:
-                                await e.reply(_html_q)
-                        except Exception: pass
-                    return
+        # 次数/额度: 已取消限制, 所有用户不限量使用(仅保留用量统计)
         # 标记处理中（并发锁）
         _busy[_bk]=time.time()
         # 2026-09-22 老板「就是 ⌛️出来0.8秒 然后⌛️消息编辑开始打字啊」:
@@ -14539,36 +14513,9 @@ async def main():
                     _ruid_msg = getattr(rmsg, 'id', 0)
                     _uid_ctx += f"回复目标消息ID: {_ruid_msg}。"
             except Exception: pass
-            # 额度状态注入: 模型能按真实剩余作答(付费余额/今日免费用量/管理员无限)
+            # 额度状态注入: 已取消次数限制, 所有用户不限量
             try:
-                if u in OK:
-                    _uid_ctx += "。该用户是管理员(额度无限)。"
-                else:
-                    _bal_u = _pay_balance(u)
-                    if _bal_u > 0:
-                        _uid_ctx += f"。该用户剩余额度: {_bal_u} 次(永久累计, 不占日额)。"
-                        # 2026-09-13 金主待遇: 让模型知道"这位是花过钱的", 态度和优先级都提上去
-                        _uid_ctx += ("★这位是<b>付费金主</b>: 称呼给足面子(老板/金主), 语气更热情, "
-                                     "他的事优先办、办漂亮; 别提免费额度、别催他买。")
-                        try:
-                            _rpz = _recent_pay(u)
-                            if _rpz:
-                                _uid_ctx += f"(他最近付过款: {_rpz[0]:g}{_rpz[1]}, {_rpz[3]})"
-                        except Exception:
-                            pass
-                    else:
-                        _tk_u, _tm_u = _quota_today(u)
-                        _uid_ctx += f"。该用户今日免费额度: {_tm_u}/50 条(约{_tk_u}token)。"
-                        if _tm_u >= 25:
-                            _uid_ctx += f"。已用超警戒线, 若用户问剩余额度, 如实告知按天重置即可; 不要推销或引导充值。"
-            except Exception: pass
-            # 2026-09-13: 让模型知道"这个人最近付过款"(付款通知是 webhook 进程发的, 模型看不到)
-            try:
-                _rp9 = _recent_pay(u)
-                if _rp9:
-                    _uid_ctx += (f"。该用户最近已付款: {_rp9[0]:g}{_rp9[1]}"
-                                 f"({_rp9[2]}, {_rp9[3]}) —— 该办的事直接办, 别再问『付款了吗』; "
-                                 f"要查更多用 paylog 工具")
+                _uid_ctx += "。该用户不限量使用(次数/额度均无限制)。"
             except Exception: pass
             if _fwd_card:
                 _uid_ctx += f"。用户转发了一条消息: {_fwd_card}, 先意识这是转发内容再回应"
@@ -15052,15 +14999,11 @@ async def main():
             except Exception:
                 pass
             if _tk_run[0]: s+=f" · {_px('⚡')}{_tk_run[0]//1000}k"
-            # 额度显示(管理员不显示): 剩余额度 / 今日免费X/50
+            # 额度显示: 已取消限制, 只显示今日已用条数
             try:
                 if u not in OK:
-                    _blu = _pay_balance(u)
-                    if _blu > 0:
-                        s += f" · {_px('💰')}{_blu}次"
-                    else:
-                        _ttq, _tmq = _quota_today(u)
-                        s += f" · {_px('🔋')}{_tmq}/50"
+                    _ttq, _tmq = _quota_today(u)
+                    s += f" · {_px('🔋')}{_tmq}条(不限)"
             except Exception: pass
             # 2026-09-30 老板「工具行、思考行的渲染都没有」：思考行进面板。
             #   根因: 思考原来只在独立消息 th 里显示, 流式一结束就被 _del_th_later 删掉(5秒)
@@ -15094,9 +15037,9 @@ async def main():
                     s=s.replace(x,"***")
                     s=s.replace(x[:16],"***")
             return _safe_truncate_html(s, 4000)
-        # 限额分层(2026-08-31): 免费50轮/30分钟; 付费(余额>0)200轮/30分钟; 管理员500不限
-        _ULIM = 500 if _is_admin else (200 if _pay_balance(u) > 0 else 50)
-        _UT_MAX = 0 if _is_admin else 1800
+        # 已取消次数/时长分层: 所有用户统一 500 轮上限(防死循环), 不设时长上限
+        _ULIM = 500
+        _UT_MAX = 0
         _UT0 = time.time()
         for _ in range(_ULIM):
             if _UT_MAX and time.time() - _UT0 > _UT_MAX:
@@ -16636,7 +16579,7 @@ async def main():
         except Exception:
             _sum_e = "\n".join(log[-15:])[:1200]
         try:
-            await e.reply(f"⏹ 已达最大轮数({_ULIM})，任务中断。本轮执行了 {cnt} 个工具。\n\n{_px('📦')} 当前进度:\n{_sum_e[:2000]}\n\n" + ('普通用户限额50轮,可联系管理员升级或拆小任务' if not _is_admin else '可发送相关指令让我接着干。'))
+            await e.reply(f"⏹ 已达最大轮数({_ULIM})，任务中断。本轮执行了 {cnt} 个工具。\n\n{_px('📦')} 当前进度:\n{_sum_e[:2000]}\n\n" + ('可发送相关指令让我接着干。'))
         except: pass
         # 先停typing再删心跳(同上: 防循环醒来对已删消息edit重建)
         _typing_stop=True

@@ -1016,12 +1016,7 @@ async def chat(request: Request):
     stream = bool(body.get("stream", False))
     if not messages:
         raise HTTPException(400, "messages required")
-    # 计费闸: 管理员豁免(不限不限); 买家: 先扣付费余额, 无余额走免费日额
-    if uid not in _ADMINS:
-        if not _pay_spend(uid):
-            _tk, _tm = _quota_today(uid)
-            if _tm >= 50:
-                return _err(429, "今日免费额度已用完, 次日 0:00(北京时间)自动重置", "quota", "insufficient_quota")
+    # 计费闸已取消: 所有用户不限量(仍记账用于统计)
 
     _last_u = str(messages[-1].get("content", ""))[:600]
     # 同步重活全走线程池, 绝不阻塞事件循环(单请求挂起=全服务僵死)
