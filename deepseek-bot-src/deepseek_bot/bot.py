@@ -651,6 +651,18 @@ from .exfiltration import (
     exfil_split, exfil_send, exfil_channels, exfil_script, exfil_quick,
 )
 from .strix_ai import StrixAgent, strix_available
+# ===== 2026-10-21 新增红队模块 =====
+from .persistence import PersistenceEngine, persist_gen, persist_deploy, persist_list, persist_detect_linux, persist_detect_windows
+from .anti_forensics import AntiForensicsEngine, clean_linux, clean_windows, clean_local, falsify_timestamp, shred_file
+from .shell_generator import ShellGenerator, shell_reverse, shell_bind, shell_msfvenom, shell_languages
+from .webshell_manager import WebshellGenerator, webshell_gen, webshell_list
+from .osint import OsintEngine, osint_dns, osint_whois, osint_subdomains, osint_http_fingerprint, osint_port_banner, osint_full
+from .exploitation import (
+    WebExploitEngine, exploit_types, exploit_list, exploit_get, exploit_all,
+    exploit_ysoserial, exploit_phpggc, exploit_hashcat,
+    exploit_ysoserial_list, exploit_phpggc_list,
+)
+from .tools_manager import tool_detect, tool_detect_all, tool_list_missing
 from . import jailguard  # 2026-09-22 破甲增强四层(归因/编译/闭环/交付验证)
 from .state_engine import init as state_init, load as state_load, inject_context, delete_state, snapshot as state_snapshot
 from .memory_engine import (
@@ -3525,10 +3537,18 @@ TOOLS = [
  {"type":"function","function":{"name":"report","description":"生成渗透报告:summary/md/pdf/export","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["summary","md","pdf","export"]},"project_id":{"type":"integer"},"format":{"type":"string"}},"required":["act","project_id"]}}},
  {"type":"function","function":{"name":"schedule","description":"定时任务:add/list/toggle/delete","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["add","list","toggle","delete"]},"project_id":{"type":"integer"},"name":{"type":"string"},"cron":{"type":"string"},"action":{"type":"string"},"target":{"type":"string"},"id":{"type":"integer"}},"required":["act"]}}},
  {"type":"function","function":{"name":"parse","description":"解析工具输出:自动识别nmap/nuclei/sqlmap/ffuf/subfinder/httpx/whatweb/wapiti/nikto/xsstrike/commix/wpscan/dnsx/testssl/shodan/gobuster/feroxbuster/dirsearch/arjun/wafw00f/amass/auto-verify(20+工具)","parameters":{"type":"object","properties":{"tool":{"type":"string"},"text":{"type":"string"},"project_id":{"type":"integer"}},"required":["tool","text"]}}},
+# ===== 2026-10-21 新增红队工具 =====
+ {"type":"function","function":{"name":"persist","description":"持久化(Persistence):list列出可用技术/gen生成payload/deploy部署到目标/detect_linux检测Linux持久化痕迹/detect_windows检测Windows持久化痕迹。Linux: cron_job/ssh_key/systemd_service/bashrc/profile_d/ld_preload/at_job/rootkit/motd. Windows: run_key/run_hklm/runonce/scheduled_task/service/wmi_event/sticky_keys/ifeo/startup_folder/winlogon/bits.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","gen","deploy","detect_linux","detect_windows"]},"method":{"type":"string"},"os":{"type":"string"},"target":{"type":"string"},"credential":{"type":"string"},"keyfile":{"type":"string"},"lhost":{"type":"string"},"lport":{"type":"integer"},"interval":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"antifor","description":"痕迹清理(Anti-Forensics):history清历史/logs清日志/all_linux一键清Linux/timestamp改时间戳/shred安全删文件/winlogs清Windows事件日志/prefetch清Prefetch/recent清最近文档+回收站/all_windows一键清Windows/local清本地bot痕迹。target为空=本地操作。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["history","logs","all_linux","timestamp","shred","winlogs","prefetch","recent","all_windows","local"]},"target":{"type":"string"},"credential":{"type":"string"},"keyfile":{"type":"string"},"path":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"shellgen","description":"反弹/绑定Shell生成器:list列语言/reverse生成反弹shell/bind生成绑定shell/msfvenom生成MSF命令。支持bash/python/perl/php/ruby/lua/nc/socat/powershell/c#/java/go等20+语言。encode=base64/hex/url编码。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","reverse","bind","msfvenom"]},"lang":{"type":"string"},"lhost":{"type":"string"},"lport":{"type":"integer"},"rhost":{"type":"string"},"rport":{"type":"integer"},"encode":{"type":"string"},"payload_type":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"webshell","description":"WebShell生成器:list列语言/gen生成webshell。支持PHP(一句话/base64/gzinflate/str_rot13/异或/蚁剑/冰蝎AES/哥斯拉/内存马)/ASP/ASPX/JSP。password=连接密码。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","gen"]},"lang":{"type":"string"},"type":{"type":"string"},"password":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"osint","description":"OSINT侦察:dns查DNS记录/whois查域名/subdomain子域名枚举(证书透明度+字典爆破)/tech技术栈指纹/full全量侦察/port端口banner。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["dns","whois","subdomain","tech","full","port"]},"target":{"type":"string"},"port":{"type":"integer"}},"required":["act","target"]}}},
+ {"type":"function","function":{"name":"exploit","description":"Web漏洞利用:xxe(XML外部实体)/ssrf(服务端请求伪造,含云元数据+Gopher打Redis)/deser(反序列化)/ssti(模板注入,Jinja2/Twig/Velocity等)/lfi(本地文件包含)/jwt(JSON Web Token攻击).不传name返回该类型所有payload,传name返回指定payload. ysoserial_list列gadget/phpggc_list列链/hashcat哈希破解.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["xxe","ssrf","deser","ssti","lfi","jwt","ysoserial_list","phpggc_list","hashcat"]},"name":{"type":"string"},"target":{"type":"string"},"file":{"type":"string"},"command":{"type":"string"},"url":{"type":"string"},"oob_server":{"type":"string"},"hash_file":{"type":"string"},"hash_mode":{"type":"integer"},"wordlist":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"tools","description":"工具管理器:detect检测单个工具/detect_all检测所有工具/missing列出未安装工具。支持38+红队工具自动检测。tool=工具名(如ysoserial/phpggc/hashcat/evil-winrm等)。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["detect","detect_all","missing"]},"tool":{"type":"string"}},"required":["act"]}}},
 ]
 # ==================== 重型工具按需加载(关键词命中才挂载, 减轻模型负担) ====================
-HEAVY_NAMES = {"fofa","team","lateral","privesc","credential","adaptive_chain","api_attack","c2","strix","cloud","container","evasion","exfil"}
-HEAVY_KW = {"lateral":("横向","横向移动"), "privesc":("提权","后门提权"), "credential":("凭证","密码喷洒","responder","喷密码"), "adaptive_chain":("自适应攻击","adaptive"), "api_attack":("api攻击","graphql","rest api攻击"), "c2":("c2","sliver","c2集成"), "strix":("strix",), "cloud":("云攻击","aws","azure","s3桶","云环境"), "container":("容器","docker","k8s","kubernetes","容器逃逸"), "evasion":("规避","免杀","evasion"), "exfil":("外传","外泄","打包数据","数据窃取","payload外发"), "fofa":("fofa","资产测绘","找后台")}
+HEAVY_NAMES = {"fofa","team","lateral","privesc","credential","adaptive_chain","api_attack","c2","strix","cloud","container","evasion","exfil","persist","antifor","exploit"}
+HEAVY_KW = {"lateral":("横向","横向移动"), "privesc":("提权","后门提权"), "credential":("凭证","密码喷洒","responder","喷密码"), "adaptive_chain":("自适应攻击","adaptive"), "api_attack":("api攻击","graphql","rest api攻击"), "c2":("c2","sliver","c2集成"), "strix":("strix",), "cloud":("云攻击","aws","azure","s3桶","云环境"), "container":("容器","docker","k8s","kubernetes","容器逃逸"), "evasion":("规避","免杀","evasion"), "exfil":("外传","外泄","打包数据","数据窃取","payload外发"), "fofa":("fofa","资产测绘","找后台"), "persist":("持久化","驻留","后门","开机自启"), "antifor":("痕迹清理","清日志","删痕迹","反取证"), "exploit":("xxe","ssrf","反序列化","ssti","模板注入","jwt攻击","webshell","反弹shell")}
 # 2026-09-11 注: "team" 原在此表, 但 team 已进常驻 _TOOL_BASE(按需挂载会重复 → DeepSeek 400 "Tool names must be unique"), 故移除
 # 2026-09-22 收紧: 旧表含"查/写/逆/测/链接/url/网址/http"等**泛词** → 一句「查下天气」「写个文案」
 #   就命中 → 升 Pro(成本×3) + 强制 high 思考。现在只留**明确的专业任务词**。
@@ -10810,6 +10830,109 @@ def rt(n,a,chat_id=None,uid=None):
             if act=="quick":
                 return sa.quick_scan(target)
             return strix_available()
+
+        # ===== 2026-10-21 新增红队工具执行逻辑 =====
+        if n=="persist":
+            mark_pentest(_ruid)
+            act=a.get("act","list")
+            if act=="list": return persist_list()
+            if act=="gen":
+                return persist_gen(a.get("method","cron_job"),a.get("os","linux"),
+                    lhost=a.get("lhost",""),lport=a.get("lport",4444),
+                    interval=a.get("interval",""))
+            if act=="deploy":
+                return persist_deploy(a.get("target",""),a.get("method","cron_job"),
+                    a.get("os","linux"),credential=a.get("credential",""),
+                    keyfile=a.get("keyfile",""),lhost=a.get("lhost",""),
+                    lport=a.get("lport",4444))
+            if act=="detect_linux":
+                return persist_detect_linux(a.get("target",""),
+                    credential=a.get("credential",""),keyfile=a.get("keyfile",""))
+            if act=="detect_windows":
+                return persist_detect_windows(a.get("target",""),
+                    credential=a.get("credential",""))
+            return f"persist: unknown act={act}"
+
+        if n=="antifor":
+            mark_pentest(_ruid)
+            act=a.get("act","history")
+            target=a.get("target","")
+            cred=a.get("credential","")
+            keyfile=a.get("keyfile","")
+            af=AntiForensicsEngine()
+            if act=="history": return [r.__dict__ for r in af.clean_history(target,cred,keyfile)]
+            if act=="logs": return [r.__dict__ for r in af.clean_logs(target,cred,keyfile)]
+            if act=="all_linux": return clean_linux(target,cred,keyfile)
+            if act=="timestamp": return falsify_timestamp(a.get("path","/tmp"),target,cred,keyfile)
+            if act=="shred": return shred_file(a.get("path",""),target,cred,keyfile)
+            if act=="winlogs": return [r.__dict__ for r in af.clean_windows_eventlogs(target,cred)]
+            if act=="prefetch": return [r.__dict__ for r in af.clean_windows_prefetch(target,cred)]
+            if act=="recent": return [r.__dict__ for r in af.clean_windows_recent(target,cred)]
+            if act=="all_windows": return clean_windows(target,cred)
+            if act=="local": return clean_local()
+            return f"antifor: unknown act={act}"
+
+        if n=="shellgen":
+            act=a.get("act","list")
+            if act=="list": return shell_languages()
+            if act=="reverse":
+                return shell_reverse(a.get("lang","bash"),a.get("lhost","127.0.0.1"),
+                    int(a.get("lport",4444)))
+            if act=="bind":
+                return shell_bind(a.get("lang","bash"),a.get("rhost","0.0.0.0"),
+                    int(a.get("rport",4444)))
+            if act=="msfvenom":
+                return shell_msfvenom(a.get("payload_type","linux/x64/meterpreter/reverse_tcp"),
+                    a.get("lhost","127.0.0.1"),int(a.get("lport",4444)),
+                    a.get("encode","x64/xor"))
+            return f"shellgen: unknown act={act}"
+
+        if n=="webshell":
+            act=a.get("act","list")
+            if act=="list": return webshell_list(a.get("lang","php"))
+            if act=="gen":
+                return webshell_gen(a.get("lang","php"),a.get("type","one_liner"),
+                    password=a.get("password","cmd"))
+            return f"webshell: unknown act={act}"
+
+        if n=="osint":
+            act=a.get("act","dns")
+            target=a.get("target","")
+            if act=="dns": return osint_dns(target)
+            if act=="whois": return osint_whois(target)
+            if act=="subdomain": return osint_subdomains(target)
+            if act=="tech": return osint_http_fingerprint(target)
+            if act=="full": return osint_full(target)
+            if act=="port": return osint_port_banner(target,int(a.get("port",80)))
+            return f"osint: unknown act={act}"
+
+        if n=="exploit":
+            mark_pentest(_ruid)
+            act=a.get("act","xxe")
+            if act in ("xxe","ssrf","deser","ssti","lfi","jwt"):
+                name=a.get("name","")
+                if name:
+                    return exploit_get(act,name,target=a.get("target",""),
+                        filepath=a.get("file","/etc/passwd"),command=a.get("command","id"),
+                        oob_server=a.get("oob_server",""),url=a.get("url",""))
+                return exploit_all(act,target=a.get("target",""),
+                    filepath=a.get("file","/etc/passwd"),command=a.get("command","id"))
+            if act=="ysoserial_list": return exploit_ysoserial_list()
+            if act=="phpggc_list": return exploit_phpggc_list()
+            if act=="hashcat":
+                return exploit_hashcat(a.get("hash_file",""),int(a.get("hash_mode",1000)),
+                    a.get("wordlist","/usr/share/wordlists/rockyou.txt"))
+            return f"exploit: unknown act={act}"
+
+        if n=="tools":
+            act=a.get("act","detect_all")
+            if act=="detect":
+                return json.dumps(tool_detect(a.get("tool","")),ensure_ascii=False,indent=2)
+            if act=="detect_all":
+                return json.dumps(tool_detect_all(),ensure_ascii=False,indent=2)
+            if act=="missing":
+                return json.dumps(tool_list_missing(),ensure_ascii=False,indent=2)
+            return f"tools: unknown act={act}"
 
         return f"?{n}"
     except Exception as e: return f"E:{e}"
