@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, quote
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 
-PORT = 8901
+PORT = int(os.getenv("MINIAPP_PORT", "8901"))
 FILES_DIR = Path("/opt/deepseek-bot/miniapp_files")
 PUBLIC_URL = os.getenv("MINIAPP_PUBLIC_URL") or "https://YOUR_SERVER_IP.sslip.io"
 

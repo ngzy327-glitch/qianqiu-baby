@@ -758,6 +758,8 @@ _BOT_BRAND = os.getenv("DSB_BRAND", "").strip() or "全能 agent bot"
 # 2026-10-03 老板「加一个开发者 @YOUR_ACCOUNT」: 开发者信息单拎出来(菜单/按钮显示), DSB_DEV 可覆盖
 _DEV_HANDLE = (os.getenv("DSB_DEV", "").strip() or "your_account").lstrip("@")
 _DEV_URL = f"https://t.me/{_DEV_HANDLE}"
+# 2026-10-21 群聊触发词(可环境变量覆盖, 逗号分隔; 命中任一即触发回复)
+_GROUP_TRIGGERS = [t.strip() for t in (os.getenv("GROUP_TRIGGER", "大肥鱼") or "").split(",") if t.strip()]
 KEY = os.getenv("DEEPSEEK_API_KEY","")
 TOKEN = os.getenv("DEEPSEEK_BOT_TOKEN","YOUR_BOT_TOKEN_HERE")
 if os.environ.get("USE_ALT_BOT_FLAG") or os.path.exists("/opt/deepseek-bot/.alt_bot_flag"):
@@ -1243,8 +1245,8 @@ try:  # 2026-09-05: 长会话提醒状态持久化(重启不丢, 不再每次重
     if _cwf.exists():
         globals()['_clear_warned'].update(json.loads(_cwf.read_text(encoding="utf-8")))
 except Exception: pass
-_OWNER_ID = 8229799375            # 主人(唯一可提权/降权的人)
-OK_FILE = Path("/opt/deepseek-bot/ok_ids.json")   # 额外管理员(提权后持久化)
+_OWNER_ID = int(os.getenv("OWNER_ID", "8229799375"))  # 主人(唯一可提权/降权的人), 可环境变量覆盖
+OK_FILE = Path(os.getenv("OK_IDS_FILE", "/opt/deepseek-bot/ok_ids.json"))   # 额外管理员(提权后持久化)
 OK = {_OWNER_ID}
 try:  # 启动时加载已授权的管理员
     for _x in (json.loads(OK_FILE.read_text(encoding="utf-8")).get("extra") or []):
@@ -1741,7 +1743,7 @@ def ctx_len(uid, chat_id=None):
         return PENTEST_CTX_GRP if _pentest else NORMAL_CTX_GRP
     return PENTEST_CTX if _pentest else NORMAL_CTX
 
-client = TelegramClient("/opt/deepseek-bot/sessions/ds",api_id=int(os.getenv("TG_API_ID", "0")),api_hash=os.getenv("TG_API_HASH", ""))
+client = TelegramClient(os.getenv("SESSION_PATH", "/opt/deepseek-bot/sessions/ds"),api_id=int(os.getenv("TG_API_ID", "0")),api_hash=os.getenv("TG_API_HASH", ""))
 client.flood_sleep_threshold = 15  # 2026-09-08: 120→15, 防 FloodWait 静默卡死整个事件循环120s(全网卡顿元凶之一)
 
 # ==================== 私聊话题(=工作台)支持  2026-09-14 ====================
@@ -6251,6 +6253,12 @@ try:
     if _PROXY_OFF_F.exists():
         print(f"[proxy] 总闸开着: 默认一律直连(要用发 proxy act=on; 配置已读入 {len(_PROXY_CFG.get('_pool') or [])} 条池)",
               flush=True)
+    # 2026-10-21 支持环境变量 PROXY_DYNAMIC_URL: proxy.json 未配 _dynamic_url 时回退到环境变量
+    if not _PROXY_CFG.get("_dynamic_url"):
+        _env_du = os.getenv("PROXY_DYNAMIC_URL", "").strip()
+        if _env_du:
+            _PROXY_CFG["_dynamic_url"] = _env_du
+            print(f"[proxy] 已从环境变量 PROXY_DYNAMIC_URL 加载动态代理池", flush=True)
 except: pass
 
 def _plain_safe(text):
@@ -13670,7 +13678,8 @@ async def main():
         # 群组过滤: 非提及/非@bot的消息只收录不回复
         if e.is_group:
             t0=e.text or ""
-            if not (e.message.mentioned or f"@{me.username}" in t0 or "大肥鱼" in t0 or str(_BOT_BRAND) in t0):
+            _hit_trigger = any(_kw in t0 for _kw in _GROUP_TRIGGERS)
+            if not (e.message.mentioned or f"@{me.username}" in t0 or _hit_trigger or str(_BOT_BRAND) in t0):
                 # 2026-09-11 打上"为什么不回": 群里没@也没喊名字 → 只收录不回复(设计如此, 不是卡住)
                 print(f"[skip] 群消息未@未喊名, 只收录不回复(chat={e.chat_id}) text={t0[:40]!r}", flush=True)
                 return

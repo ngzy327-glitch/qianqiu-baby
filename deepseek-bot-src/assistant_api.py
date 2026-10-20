@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from dotenv import load_dotenv
 
-BASE = Path("/opt/deepseek-bot")
+BASE = Path(os.getenv("BOT_BASE", "/opt/deepseek-bot"))
 load_dotenv(BASE / ".env", override=True)
 
 DEEPSEEK_API = os.getenv("DEEPSEEK_API", "https://api.deepseek.com/v1")
@@ -19,10 +19,11 @@ DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 MODEL_UP = "deepseek-chat"
 DB = str(BASE / "data.db")
 KEYS_F = BASE / "assistant_api_keys.json"
-_OWNER_ID = 8229799375
+_OWNER_ID = int(os.getenv("OWNER_ID", "8229799375"))
 _ADMINS = {_OWNER_ID}
 try:  # 与 bot.py 共用 ok_ids.json: /grant 提权后这里也认
-    for _x in (json.loads((BASE / "ok_ids.json").read_text(encoding="utf-8")).get("extra") or []):
+    _okf = Path(os.getenv("OK_IDS_FILE", str(BASE / "ok_ids.json")))
+    for _x in (json.loads(_okf.read_text(encoding="utf-8")).get("extra") or []):
         _ADMINS.add(int(_x))
 except Exception: pass
 
