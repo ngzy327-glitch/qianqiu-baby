@@ -1021,7 +1021,7 @@ async def chat(request: Request):
         if not _pay_spend(uid):
             _tk, _tm = _quota_today(uid)
             if _tm >= 50:
-                return _err(429, "今日免费额度已用完, 联系 @YOUR_ACCOUNT 充值", "quota", "insufficient_quota")
+                return _err(429, "今日免费额度已用完, 次日 0:00(北京时间)自动重置", "quota", "insufficient_quota")
 
     _last_u = str(messages[-1].get("content", ""))[:600]
     # 同步重活全走线程池, 绝不阻塞事件循环(单请求挂起=全服务僵死)

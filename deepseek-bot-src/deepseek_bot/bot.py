@@ -4478,7 +4478,6 @@ def _can_edit(limit=5, pool="gen"):
 
 _gq_notified=set()  # 已弹过"处理中"提示的busy key(每任务周期一次, 任务结束清除)
 _active_topic = {}  # uid -> chat_key: 话题切换(私聊), 点历史话题按钮设置, 后续消息按该话题历史接话
-_PAY_PLAN = {"2": 60, "5": 175, "10": 360, "20": 750}  # OKPay 档位: 价格U -> 次数(买大送多, 2U基础60)
 # 自定义表情开关: 按uid控制(非管理员也能关, 开关存 emoji_switch.json)
 _EMOJI_OFF = set()
 try:
@@ -4516,7 +4515,7 @@ def _home_card(uid):
         f"<code>/start</code> 本菜单 · <code>/bg</code> 后台任务 · <code>/model</code> 模型+推理等级\n"
         f"<code>/stop</code> 停当前任务 · <code>/clear</code> 清历史 · <code>/ctx</code> 上下文占用\n"
         f"<code>/thinking</code> 思考开关 · <code>/talkshow</code> 过程播报 · <code>/mod</code> 群管\n\n"
-        f"{_px('🔋')} " + (f"剩余额度: <b>{_pay_balance(uid)} 次</b> (按天重置, 永久叠加)" if (uid not in OK and _pay_balance(uid) > 0) else f"今日免费额度: <b>{_n_h}/50</b> 条") + ("<i>(管理员不限)</i>" if uid in OK else "") + "\n\n"
+        f"{_px('🔋')} " + (f"额外次数: <b>{_pay_balance(uid)} 次</b>" if (uid not in OK and _pay_balance(uid) > 0) else f"今日免费额度: <b>{_n_h}/50</b> 条") + ("<i>(管理员不限)</i>" if uid in OK else "") + "\n\n"
         f"{_px('👨💻')} 开发者: <a href=\"{_DEV_URL}\">@{_DEV_HANDLE}</a> · 有问题直接找他\n"
         f"{_px('👇')} 点下面的按钮:"
     )
@@ -5694,23 +5693,6 @@ def _dt_apply(text, ents=None):
     return final, _merge_entities(_fixed, new_ents)
 
 
-def _okpay_flatten(data, prefix=""):
-    _out = {}
-    for _k, _v in data.items():
-        _key = str(_k) if prefix == "" else f"{prefix}.{_k}"
-        if isinstance(_v, dict):
-            _out.update(_okpay_flatten(_v, _key)); continue
-        if isinstance(_v, bool):
-            _out[_key] = "true" if _v else "false"; continue
-        if _v is None or _v == "":
-            continue
-        _out[_key] = str(_v)
-    return _out
-def _okpay_sign(params: dict, token: str) -> str:
-    _data = {k: v for k, v in params.items() if k != "sign"}
-    _flat = _okpay_flatten(_data)
-    _base = "&".join(f"{k}={_flat[k]}" for k in sorted(_flat.keys())).encode("utf-8")
-    return hmac.new(token.encode("utf-8"), _base, hashlib.sha256).hexdigest().upper()
 def _rel(_bk):
     """任务真正结束时调用: 释放并发锁+提示记录+唤醒队列"""
     _busy.pop(_bk,None)
@@ -8091,7 +8073,7 @@ def _usage_card(uid):
             f"{_px('💰')} <b>API key 余额</b>: {_hesc(_bal)}" + ("" if _ok else " ⚠️"),
             f"   · 今日消耗: <b>{_tk:,}</b> token · <b>{_msgs}</b> 条"
             f"（免费额度 {_QUOTA_DAILY_N} 条 / {_QUOTA_DAILY_T:,} token）",
-            f"   · 付费次数余额: <b>{_pay}</b> 次（按天重置，优先扣不占日额）",
+            f"   · 管理员授予的额外次数: <b>{_pay}</b> 次（优先扣, 不占日额）",
             f"   · 当前模型: <b>{_hesc(str(_model_light()))}</b>（轻） / <b>{_hesc(str(MODEL_PRO))}</b>（重）",
         ]
         return "\n".join(_lines)
@@ -11315,7 +11297,7 @@ async def main():
                 _doc_h2 = (
                     f"🤖 <b>{_BOT_BRAND} · 对话引擎 API</b>\n\n"
                     f"<b>Base URL:</b> <code>http://YOUR_SERVER_IP/v1</code>\n"
-                    f"<b>API Key:</b> <code>sk-xxxx</code> — 找 <b>@YOUR_ACCOUNT</b> 购买(按天重置, 永久叠加)\n\n"
+                    f"<b>API Key:</b> <code>sk-xxxx</code> — 每日免费额度, 管理员可额外授权\n\n"
                     f"点下面按钮看各接入方式:\n"
                     f"💡 1 次请求=1 次 · 带记忆 · 脾气火爆"
                 )
@@ -11323,7 +11305,6 @@ async def main():
                     [Button.inline("👨‍💻 curl", b"apidoc:curl"),
                      Button.inline("🐍 Python", b"apidoc:py"),
                      Button.inline("🌐 客户端", b"apidoc:client")],
-                    [Button.inline("💰 计费/充值", b"apidoc:pay")],
                     [Button.inline("🏠 主页", b"home")],
                 ]
                 try:
@@ -11348,14 +11329,6 @@ async def main():
                     "<b>4.</b> 模型名填: <code>whale</code>\n\n"
                     "⚠️ 部分客户端强制 HTTPS, 正式版域名上线后(找 @YOUR_ACCOUNT)可切换"
                 ),
-                "pay": (
-                    "💰 <b>计费</b>\n\n"
-                    "· <b>2U = 60 次</b> (5U=175 / 10U=360 / 20U=750, 永久叠加)\n"
-                    "· 1 次请求 = 1 次 (流式/普通同价)\n"
-                    "· 与 TG 机器人 <b>同一余额</b>, 两边通用\n"
-                    "· 免费用户: 每日 50 条, 超了返回 429\n\n"
-                    "购买/充值: 找 <b>@YOUR_ACCOUNT</b> (USDT/TRC20)"
-                ),
             }
             _html_d = _docs.get(_seg, _docs["curl"])
             try:
@@ -11368,7 +11341,7 @@ async def main():
             _doc_h2 = (
                 f"🤖 <b>{_BOT_BRAND} · 对话引擎 API</b>\n\n"
                 f"<b>Base URL:</b> <code>http://YOUR_SERVER_IP/v1</code>\n"
-                f"<b>API Key:</b> <code>sk-xxxx</code> — 找 <b>@YOUR_ACCOUNT</b> 购买(按天重置, 永久叠加)\n\n"
+                f"<b>API Key:</b> <code>sk-xxxx</code> — 每日免费额度, 管理员可额外授权\n\n"
                 f"点下面按钮看各接入方式:\n"
                 f"💡 1 次请求=1 次 · 带记忆 · 脾气火爆"
             )
@@ -11376,7 +11349,6 @@ async def main():
                 [Button.inline("👨‍💻 curl", b"apidoc:curl"),
                  Button.inline("🐍 Python", b"apidoc:py"),
                  Button.inline("🌐 客户端", b"apidoc:client")],
-                [Button.inline("💰 计费/充值", b"apidoc:pay")],
             ]
             try:
                 await cb.edit(_doc_h2, parse_mode="HTML", buttons=_btns_a2)
@@ -11427,128 +11399,6 @@ async def main():
                 except Exception: pass
             try: await cb.answer("")
             except Exception: pass
-            return
-        if False:  # 2026-09-25 开源版: 收款面板已移除
-            # 💎 /start 菜单 → 购买套餐入口: 档位按钮
-            try:
-                _uid_m = cb.sender_id
-                if _uid_m in OK:
-                    await cb.answer("管理员无需购卡 😏")
-                    return
-                _btns_pm = []
-                _row_pm = []
-                for _pr2, _cn2 in _PAY_PLAN.items():
-                    _row_pm.append(_b(f"{_pr2}U / {_cn2}次", f"payplan:{_pr2}", style="success", icon="💍"))
-                    if len(_row_pm) == 2:
-                        _btns_pm.append(_row_pm); _row_pm = []
-                if _row_pm: _btns_pm.append(_row_pm)
-                # 2026-09-14 涨价: SPECTRE 框架版 XXX → XXX U(老板要求)
-                _btns_pm.append([_b("📦 源码框架版 XXX U", "paysrc", style="success", icon="📦")])
-                _btns_pm.append([_b("返回主页", "home", style="primary", icon="🏠")])
-                _html_pm2 = (
-                    f"💳 <b>选择 VIP 套餐</b>\n\n"
-                    f"· <b>永久有效, 可叠加</b>\n"
-                    f"· 不占每日免费额度\n"
-                    f"· <b>买大送多</b>(20U≈8折)\n\n"
-                    f"📦 <b>源码框架版 XXX U</b>: 机器人<b>完整源码框架</b>, "
-                    f"付款后<b>自动发到本对话</b>(秒到), 含部署文档与安装协助\n\n"
-                    f"👇 点按钮选套餐, 支付完成<b>自动到账/自动发货</b>"
-                )
-                try:
-                    await asyncio.to_thread(_edit_kb, cb.chat_id, cb.message_id, _html_pm2, _btns_pm)
-                except Exception:
-                    await cb.reply(_html_pm2, parse_mode="html", buttons=_tbtn(_btns_pm))
-                await cb.answer("")
-                return
-            except Exception as _pme:
-                print(f"[paymenu] err: {_pme}", flush=True)
-                await cb.answer("❌ 菜单异常", alert=True)
-            return
-        if data.startswith(b"payplan:"):
-            # 💎 套餐选择 → 生成对应档位支付链接
-            try:
-                _pr_no = data.split(b":")[1].decode()
-                _pr_cn = _PAY_PLAN.get(_pr_no, 0)
-                if not _pr_cn:
-                    await cb.answer("无效套餐", alert=True); return
-                import httpx as _hxp
-                import secrets as _sec
-                _d0 = {"amount": _pr_no, "coin": "USDT", "unique_id": f"pay:{cb.sender_id}:{_pr_no}:{_sec.token_hex(3)}", "name": f"{_BOT_BRAND}-VIP{_pr_no}U", "id": os.getenv("OKPAY_MERCHANT", ""), "timestamp": int(time.time()), "nonce": _sec.token_hex(8)}
-                _d0["sign"] = _okpay_sign(_d0, os.getenv("OKPAY_TOKEN", ""))
-                async with _hxp.AsyncClient(timeout=15) as _hxc:
-                    _rq = await _hxc.post("https://api.okaypay.me/shop/payLink", json=_d0)
-                _jr = _rq.json() if _rq.status_code == 200 else {"code": -1, "msg": _rq.text[:200]}
-                if _jr.get("data", {}).get("pay_url") and str(_jr.get("code")) in ("10000", "200"):
-                    _url_p = _jr["data"]["pay_url"]
-                    _html_p = (
-                        f"💎 <b>VIP {_pr_no}U = {_pr_cn} 次</b>\n\n"
-                        f"· 永久有效, 可叠加\n"
-                        f"· 不占每日免费额度\n\n"
-                        f"✅ <b>点下面按钮直接支付</b>, 支付完成<b>自动到账</b>(约10秒)\n"
-                        f"📞 问题联系 <b>@YOUR_ACCOUNT</b>"
-                    )
-                    # 2026-09-11 支付页补返回(原来只有"立即支付", 用户回不去)
-                    _kb_pay = [[_b("立即支付", url=_url_p, style="success", icon="💳")],
-                               [_b("返回主页", "home", icon="🔙"), _b("返回主页", "home", style="primary", icon="🏠")]]
-                    try:
-                        await asyncio.to_thread(_edit_kb, cb.chat_id, cb.message_id, _html_p, _kb_pay)
-                    except Exception:
-                        try:
-                            await cb.reply(_html_p, parse_mode="html", buttons=_tbtn(_kb_pay))
-                        except Exception:
-                            try:
-                                payload = {"chat_id": cb.chat_id, "text": _html_p + f"\n{_url_p}", "parse_mode": "HTML"}
-                                import urllib.request as _urp
-                                _req_p = _urp.Request(f"{BOT_API}/sendMessage", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-                                _urp.urlopen(_req_p, timeout=15)
-                            except Exception: pass
-                    await cb.answer("✅ 支付链接已生成")
-                    return
-                print(f"[pay] payLink失败: {str(_jr)[:200]}", flush=True)
-                await cb.answer("❌ 生成失败, 联系 @YOUR_ACCOUNT", alert=True)
-            except Exception as _pe:
-                print(f"[pay] err: {_pe}", flush=True)
-                await cb.answer("❌ 支付服务异常", alert=True)
-            return
-        if data.startswith(b"paysrc"):
-            # 2026-09-14 源码框架版(XXX U): 生成支付链接 → 付完由 okpay_webhook 自动把源码包发给买家
-            try:
-                import httpx as _hxs
-                import secrets as _secs
-                _d0s = {"amount": "0.00", "coin": "USDT",
-                        "unique_id": f"src:{cb.sender_id}:{_secs.token_hex(3)}",
-                        "name": f"{_BOT_BRAND}-源码框架版", "id": os.getenv("OKPAY_MERCHANT", ""),
-                        "timestamp": int(time.time()), "nonce": _secs.token_hex(8)}
-                _d0s["sign"] = _okpay_sign(_d0s, os.getenv("OKPAY_TOKEN", ""))
-                async with _hxs.AsyncClient(timeout=15) as _hxc2:
-                    _rqs = await _hxc2.post("https://api.okaypay.me/shop/payLink", json=_d0s)
-                _jrs = _rqs.json() if _rqs.status_code == 200 else {"code": -1, "msg": _rqs.text[:200]}
-                if _jrs.get("data", {}).get("pay_url") and str(_jrs.get("code")) in ("10000", "200"):
-                    _us = _jrs["data"]["pay_url"]
-                    _htmls = (
-                        f"📦 <b>{_BOT_BRAND} Bot 源码框架版</b> — XXX USDT\n\n"
-                        f"· <b>完整源码框架</b>: 引擎 + 工具循环 + 多智能体(子代理/编排/迭代/持久目标) + "
-                        f"记忆/知识库 + 面板/心跳 + 计费权限 + 声明式插件机制\n"
-                        f"· 交付: 源码包 + 部署文档 + 使用手册 + 远程安装协助\n"
-                        f"· <b>付款后机器人自动把源码包发到本对话</b>(约 10 秒, 不用等人工)\n\n"
-                        f"👇 点下面按钮支付\n📞 售后/定制联系 <b>@YOUR_ACCOUNT</b>"
-                    )
-                    _kbs = [[_b("立即支付 XXX U", url=_us, style="success", icon="💳")],
-                            [_b("返回主页", "home", icon="🔙"), _b("返回主页", "home", style="primary", icon="🏠")]]
-                    try:
-                        await asyncio.to_thread(_edit_kb, cb.chat_id, cb.message_id, _htmls, _kbs)
-                    except Exception:
-                        try:
-                            await cb.reply(_htmls, parse_mode="html", buttons=_tbtn(_kbs))
-                        except Exception:
-                            pass
-                    await cb.answer("✅ 支付链接已生成, 付完自动发货")
-                    return
-                print(f"[paysrc] payLink失败: {str(_jrs)[:200]}", flush=True)
-                await cb.answer("❌ 生成失败, 联系 @YOUR_ACCOUNT", alert=True)
-            except Exception as _pse:
-                print(f"[paysrc] err: {_pse}", flush=True)
-                await cb.answer("❌ 支付服务异常", alert=True)
             return
         if data.startswith(b"ask:") or data.startswith(b"askok:") or data.startswith(b"askskip:"):
             # 2026-09-11 交互提问回调: 单选即答 / 多选toggle+提交 / 跳过 —— 全部"原地编辑"提问消息, 绝不新发
@@ -11670,7 +11520,7 @@ async def main():
                 _txt_u = (f"{_px('📊')} <b>用量面板</b>\n\n"
                           f"· 今日消息: <b>{_tm_c}</b> 条\n"
                           f"· 今日 token: <b>{_tk_c}</b>\n"
-                          f"· 付费余额: <b>{_pay_balance(_u_c)}</b> 次\n"
+                          f"· 额外次数: <b>{_pay_balance(_u_c)}</b> 次\n"
                           f"· 全局历史: <b>{_hcnt}</b> 条\n"
                           f"· 模型: <code>{_model_cfg.get('mode','auto')}</code> → {_model_light()}\n"
                           f"· 自进化剧本: <b>{_scn}</b> 条")
@@ -12470,93 +12320,10 @@ async def main():
             print(f"[charge] err: {_ce}", flush=True)
             await e.reply(f"{_px('❌')} 格式: <code>/charge &lt;用户ID&gt; &lt;次数&gt;</code>", parse_mode="HTML")
 
-    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:pay|收款|收钱)(?:\s+([\d.]+))?(?:\s*([A-Za-z]{2,4}))?$"))
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:pay|收款|收钱)(?:\s+.*)?$"))
     async def _(e):
-        """OKPay 收款: `/pay` 出套餐菜单; `/pay 100 usdt|cny|trx` 出**任意金额**收款链接(2026-09-13)"""
-        _amt_s = (e.pattern_match.group(1) or "").strip()
-        _coin_s = (e.pattern_match.group(2) or "").strip().upper()
-        if _amt_s:
-            # ===== 任意金额收款(USDT/CNY/TRX 网关都收; 小数也行) =====
-            try:
-                _amt_f = float(_amt_s)
-            except Exception:
-                _amt_f = 0.0
-            _coin_s = _coin_s or "USDT"
-            # RMB 网关不认(实测"未知货币 : RMB"), 帮用户纠正
-            if _coin_s in ("RMB", "RMB¥", "CN¥", "YUAN"):
-                _coin_s = "CNY"
-            if _amt_f <= 0 or _amt_f > 1000000:
-                await e.reply(f"{_px('❌')} 金额不对: <code>{_hesc(_amt_s)}</code> —— 用法 <code>/pay 100 usdt</code> "
-                              f"(币种 usdt / cny / trx)", parse_mode="HTML")
-                return
-            if _coin_s not in ("USDT", "CNY", "TRX"):
-                await e.reply(f"{_px('❌')} 只支持 <b>USDT / CNY / TRX</b>(RMB 要写 CNY)", parse_mode="HTML")
-                return
-            # 2026-09-13 频控: 防有人狂刷 /pay 生成一堆废订单(网关那边也会烦)
-            try:
-                _rl = globals().setdefault('_PAY_RL', {})
-                _now_rl = time.time()
-                _hist = [t for t in (_rl.get(e.sender_id) or []) if _now_rl - t < 120]
-                if len(_hist) >= 5:
-                    await e.reply(f"{_px('⏳')} 生成收款链接太频繁了, 歇 2 分钟再来(已有 {len(_hist)} 单在手)", parse_mode="HTML")
-                    return
-                _hist.append(_now_rl)
-                _rl[e.sender_id] = _hist
-            except Exception:
-                pass
-            try:
-                import httpx as _hxb
-                import secrets as _secb
-                _db = {"amount": ("%g" % _amt_f), "coin": _coin_s,
-                       "unique_id": f"bill:{e.sender_id}:{_secb.token_hex(3)}",
-                       "name": f"{_BOT_BRAND}-收款{_amt_f:g}{_coin_s}", "id": os.getenv("OKPAY_MERCHANT", ""),
-                       "timestamp": int(time.time()), "nonce": _secb.token_hex(8)}
-                _db["sign"] = _okpay_sign(_db, os.getenv("OKPAY_TOKEN", ""))
-                async with _hxb.AsyncClient(timeout=15) as _hxc3:
-                    _rqb = await _hxc3.post("https://api.okaypay.me/shop/payLink", json=_db)
-                _jrb = _rqb.json() if _rqb.status_code == 200 else {"code": -1, "msg": _rqb.text[:200]}
-                _urlb = (_jrb.get("data") or {}).get("pay_url")
-                if _urlb and str(_jrb.get("code")) in ("10000", "200"):
-                    _htmlb = (f"{_px('💳')} <b>收款 {_amt_f:g} {_coin_s}</b>\n\n"
-                              f"· 金额: <b>{_amt_f:g} {_coin_s}</b>\n"
-                              f"· 付款后<b>自动确认</b>, 我会收到通知\n\n"
-                              f"👇 点下面按钮支付\n{_px('📞')} 问题联系 <b>@YOUR_ACCOUNT</b>")
-                    _kbb = [[_b(f"支付 {_amt_f:g} {_coin_s}", url=_urlb, style="success", icon="💳")],
-                            [_b("返回主页", "home", style="primary", icon="🏠")]]
-                    try:
-                        await asyncio.to_thread(_send_kb, e.chat_id, _htmlb, _kbb, "HTML", e.id)
-                    except Exception:
-                        await e.reply(_htmlb + f"\n{_urlb}", parse_mode="HTML")
-                    print(f"[bill] 生成收款链接 {_amt_f:g}{_coin_s} uid={e.sender_id}", flush=True)
-                else:
-                    await e.reply(f"{_px('❌')} 生成收款链接失败: {_hesc(str(_jrb.get('msg') or _jrb)[:80])}", parse_mode="HTML")
-            except Exception as _be:
-                print(f"[bill] err: {_be}", flush=True)
-                await e.reply(f"{_px('❌')} 收款服务异常, 联系 @YOUR_ACCOUNT", parse_mode="HTML")
-            return
-        if e.sender_id in OK:
-            await e.reply(f"管理员无需购卡, 无限畅聊 {_px('😏')}", parse_mode="HTML")
-            return
-        _btns_p = []
-        _row_p = []
-        for _pr, _cn in _PAY_PLAN.items():
-            _row_p.append(_b(f"{_pr}U / {_cn}次", f"payplan:{_pr}", style="success", icon="💍"))
-            if len(_row_p) == 2:
-                _btns_p.append(_row_p); _row_p = []
-        if _row_p: _btns_p.append(_row_p)
-        _btns_p.append([_b("返回主页", "home", style="primary", icon="🏠")])
-        _html_pm = (
-            f"💳 <b>选择 VIP 套餐</b>\n\n"
-            f"· <b>永久有效, 可叠加</b>\n"
-            f"· 不占每日免费额度\n"
-            f"· <b>买大送多</b>(20U≈8折)\n\n"
-            f"👇 点按钮选套餐, 支付完成<b>自动到账</b>(约10秒)\n"
-            f"📞 问题联系 <b>@YOUR_ACCOUNT</b>"
-        )
-        try:
-            await asyncio.to_thread(_send_kb, e.chat_id, _html_pm, _btns_p, reply_to=e.id)
-        except Exception:
-            await e.reply(f"{_px('💳')} 选择套餐失败, 联系 @YOUR_ACCOUNT", parse_mode="HTML")
+        """收款/会员功能已关闭(用户要求不再卖会员)"""
+        await e.reply(f"{_px('🔋')} 收款与会员功能已关闭, 仅保留每日免费额度。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/emoji(?:\s+(-?\d+)\s+(on|off|开|关))?$"))
     async def _(e):
@@ -12649,52 +12416,6 @@ async def main():
             await e.reply(f"{_px('🤖')} API 体系已下线(2026-09-07)。有需要联系主人。", parse_mode="HTML")
         except Exception:
             pass
-
-    @client.on(events.NewMessage(incoming=True, pattern=r"^/__disabled__unban$"))
-    async def _(e):
-        """被禁言用户: /unban 支付2U快速解禁(独行解禁订单)"""
-        _uid_u = e.sender_id
-        # 2026-09-14 修: active_bans 在 group_mod 里, 原来没 import → /unban(2U 解禁收款)必炸 NameError
-        try:
-            from .group_mod import active_bans as _active_bans
-        except Exception:
-            try:
-                from group_mod import active_bans as _active_bans
-            except Exception:
-                _active_bans = None
-        _bans = _active_bans(_uid_u) if _active_bans else []
-        if not _bans:
-            await e.reply(f"{_px('✅')} 你当前没有有效禁言。", parse_mode="HTML")
-            return
-        # 生成 2U 解禁订单(unique_id=unban:{uid}:{chat1}:{chat2}...)
-        try:
-            import httpx as _hxp
-            import secrets as _sec
-            _chats_s = ":".join(str(c) for c, _u, _r in _bans[:3])
-            _d0 = {"amount": "2", "coin": "USDT", "unique_id": f"unban:{_uid_u}:{_chats_s}:{_sec.token_hex(3)}", "name": f"{_BOT_BRAND}-解禁", "id": os.getenv("OKPAY_MERCHANT", ""), "timestamp": int(time.time()), "nonce": _sec.token_hex(8)}
-            _d0["sign"] = _okpay_sign(_d0, os.getenv("OKPAY_TOKEN", ""))
-            async with _hxp.AsyncClient(timeout=15) as _hc_u:
-                _rq_u = await _hc_u.post("https://api.okaypay.me/shop/payLink", json=_d0)
-            _jr_u = _rq_u.json() if _rq_u.status_code == 200 else {"code": -1, "msg": _rq_u.text[:150]}
-            if _jr_u.get("data", {}).get("pay_url"):
-                _n_u = len(_bans)
-                _html_u = (
-                    f"🛡️ 你有 {_n_u} 个群的禁言待解\n\n"
-                    f"💎 <b>支付 解禁</b>(马上恢复发言)\n\n"
-                    f"👇 <b>点下面按钮支付:</b>\n"
-                    f"(不解的话, 等禁言到期自动恢复也行)\n"
-                    f"申诉: @YOUR_ACCOUNT"
-                )
-                try:
-                    await e.reply(_html_u, parse_mode="html", buttons=[[Button.url("💳 2U 立即解禁", _jr_u["data"]["pay_url"])]])
-                except Exception:
-                    await e.reply(_html_u + f"\n{_jr_u['data']['pay_url']}")
-                return
-            print(f"[unban] payLink失败: {str(_jr_u)[:150]}", flush=True)
-            await e.reply(f"{_px('❌')} 解禁订单生成失败, 联系 @YOUR_ACCOUNT", parse_mode="HTML")
-        except Exception as _ue:
-            print(f"[unban] err: {_ue}", flush=True)
-            await e.reply(f"{_px('❌')} 解禁服务异常, 联系 @YOUR_ACCOUNT", parse_mode="HTML")
 
     # ==================== 私聊话题工作台 (2026-09-14, Bot API 9.4) ====================
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:新授权|新工作台|新话题|新主题|newtopic)(?:\s+(.+))?$"))
@@ -13638,7 +13359,7 @@ async def main():
                 _hk = _active_topic[u]
         except Exception: pass
         _stk = _hk  # 停止信号 key（群聊/私聊/话题各自独立）
-        # === 群管: 规则词/刷屏 → 删+禁言+记录(管理员豁免); 充值解禁见 /unban ===
+        # === 群管: 规则词/刷屏 → 删+禁言+记录(管理员豁免); 解禁见 /mod unban ===
         if e.is_group and u not in OK:  # ⚠️ 不用_is_admin(其在3643才定义,此处未定义会NameError被吞)→直接u in OK
             try:
                 from .group_mod import is_on as _gmd_on, check as _gmd_check, flood_check as _gmd_flood, ban_minutes as _gmd_min, record_ban as _gmd_rec
@@ -13661,7 +13382,7 @@ async def main():
                                 print(f"[gmod] 禁言失败: {_gpe}", flush=True)
                             try:
                                 # 2026-09-11 修: 有 _px() 就必须给 parse_mode, 否则裸标签
-                                await client.send_message(u, f"{_px('🛡️')} 你在{_BOT_BRAND}管理的群里被禁言了\n\n原因: 「{_hesc(_g_why)}」命中群规\n时长: {_g_min} 分钟\n\n{_px('💡')} 不想等? 回复 /unban 支付 解禁 · 申诉联系 @YOUR_ACCOUNT", parse_mode="html")
+                                await client.send_message(u, f"{_px('🛡️')} 你在{_BOT_BRAND}管理的群里被禁言了\n\n原因: 「{_hesc(_g_why)}」命中群规\n时长: {_g_min} 分钟\n\n{_px('💡')} 等禁言到期自动恢复, 有疑问联系 @YOUR_ACCOUNT", parse_mode="html")
                             except Exception: pass
                             print(f"[gmod] {u} 被禁言({_g_why}) in {e.chat_id}", flush=True)
                             return
@@ -14194,8 +13915,7 @@ async def main():
                             await _send_gate()
                             _html_q = ("🔋 <b>今日免费额度已用完(50/50)</b>\n\n"
                                        f"⏰ <b>重置:</b> 北京时间每天 <b>0:00</b> 自动恢复\n"
-                                       f"💎 <b>额度按天重置</b> 永久叠加不占日额\n"
-                                       f"📞 充值/问题: <b>@YOUR_ACCOUNT</b>")
+                                       f"💡 有需要可联系管理员 @YOUR_ACCOUNT")
                             try:
                                 await asyncio.to_thread(_send_kb, e.chat_id, _html_q,
                                          [[_b("返回主页", "home", style="success", icon="💍")],
@@ -14500,7 +14220,7 @@ async def main():
                     _gmod_note = ("===群管(本群开启中)===你是本群管理AI: 看到明显违规(广告/引流/刷屏/辱骂/拉群)可以调用 group 工具 delmsg 删除该消息, 并报告一句「发现违规已删」; "
                                   "⚠️ 不要自动 mute 禁言/kick 踢人——管理员(OK名单)没明确指令时先报告等指令; 但管理员本人(OK名单)直接下令「禁言/踢人/清人/清理」= 有效授权, 立即执行: 先 group extract/members2/find 查名单再动手, 别拿「先报告」拖延; "
                                   "普通提问/闲聊/吐槽一律不动; 不确定的疑似情况只提示不处理; "
-                                  "被处理的用户可私聊走 /unban。")
+                                  "被处理的用户等禁言到期自动恢复, 管理员可用 /mod unban 手动解禁。")
                     gid = "这是群聊。" + _gmod_note
             except Exception: pass
         # === 群聊记忆: 消息已在 handler 开头全量收录（含未@bot的），这里不再重复 ===
@@ -14840,7 +14560,7 @@ async def main():
                         _tk_u, _tm_u = _quota_today(u)
                         _uid_ctx += f"。该用户今日免费额度: {_tm_u}/50 条(约{_tk_u}token)。"
                         if _tm_u >= 25:
-                            _uid_ctx += f"。已用超警戒线, 若用户问剩余额度或接近用完时, 自然提示购买套餐(/paymenu, 按天重置永久); 别主动催卖。"
+                            _uid_ctx += f"。已用超警戒线, 若用户问剩余额度, 如实告知按天重置即可; 不要推销或引导充值。"
             except Exception: pass
             # 2026-09-13: 让模型知道"这个人最近付过款"(付款通知是 webhook 进程发的, 模型看不到)
             try:
@@ -15380,7 +15100,7 @@ async def main():
         _UT0 = time.time()
         for _ in range(_ULIM):
             if _UT_MAX and time.time() - _UT0 > _UT_MAX:
-                _lim_txt = "任务超时(付费30分钟限额)" if _ULIM == 200 else "任务超时(普通用户3分钟限额)。要长任务必须买套餐或联系管理员。"
+                _lim_txt = "任务超时(30分钟限额)" if _ULIM == 200 else "任务超时(普通用户3分钟限额)。需要长任务请联系管理员。"
                 try:
                     _sum_e = await _freeze_summary(m, log, u, f"(任务因{_lim_txt[:-1]}截断,第{round_num}轮执行了{cnt}个工具)\n")
                 except Exception:

@@ -50,4 +50,4 @@ tg_user.py               ACCOUNTS 里的 "tg_id": None → 你的双号 TG ID
 | 人格/语气 | `bot.py` 里 `sp=` 的"自身身份/多重人格/表达"段落 |
 | 模型 | `MODEL / MODEL_PRO / MODEL_BETA` 常量 + `/model` 按钮 |
 | 工具能力 | 优先加 `knowledge/toolPlugins/*.json`(声明式, 免改核心) |
-| 定价/套餐 | `bot.py` 计费段落（收款模块不随包，自行对接） |
+| 定价/套餐 | 已移除(仅保留每日免费额度; 管理员可用 `/charge` 手动加次数) |
