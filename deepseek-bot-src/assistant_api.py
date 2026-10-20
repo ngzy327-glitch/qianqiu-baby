@@ -19,7 +19,12 @@ DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 MODEL_UP = "deepseek-chat"
 DB = str(BASE / "data.db")
 KEYS_F = BASE / "assistant_api_keys.json"
-_ADMINS = {8229799375, None}  # 与 bot.py OK 名单一致: 管理员豁免计费(2026-09-07)
+_OWNER_ID = 8229799375
+_ADMINS = {_OWNER_ID}
+try:  # 与 bot.py 共用 ok_ids.json: /grant 提权后这里也认
+    for _x in (json.loads((BASE / "ok_ids.json").read_text(encoding="utf-8")).get("extra") or []):
+        _ADMINS.add(int(_x))
+except Exception: pass
 
 app = FastAPI(title="whale-api")
 

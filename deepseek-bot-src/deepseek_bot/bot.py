@@ -1243,7 +1243,22 @@ try:  # 2026-09-05: 长会话提醒状态持久化(重启不丢, 不再每次重
     if _cwf.exists():
         globals()['_clear_warned'].update(json.loads(_cwf.read_text(encoding="utf-8")))
 except Exception: pass
-OK = {8229799375,None}
+_OWNER_ID = 8229799375            # 主人(唯一可提权/降权的人)
+OK_FILE = Path("/opt/deepseek-bot/ok_ids.json")   # 额外管理员(提权后持久化)
+OK = {_OWNER_ID}
+try:  # 启动时加载已授权的管理员
+    for _x in (json.loads(OK_FILE.read_text(encoding="utf-8")).get("extra") or []):
+        OK.add(int(_x))
+except Exception: pass
+
+def _ok_save():
+    """把额外管理员写盘(重启不丢)"""
+    try:
+        OK_FILE.write_text(json.dumps(
+            {"extra": sorted(i for i in OK if i and i != _OWNER_ID)},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as _e:
+        print(f"[ok] 保存管理员名单失败: {_e}", flush=True)
 MH = 600
 TOOL_RES_MAX = 2000   # 工具结果进历史的最大字符（防上下文膨胀）
 TOOL_RES_KEEP = 500   # 完整结果保留给模型看的前缀长度（超长截断）
@@ -4514,7 +4529,8 @@ def _home_card(uid):
         f"{_px('💡')} <b>常用指令</b>\n"
         f"<code>/start</code> 本菜单 · <code>/bg</code> 后台任务 · <code>/model</code> 模型+推理等级\n"
         f"<code>/stop</code> 停当前任务 · <code>/clear</code> 清历史 · <code>/ctx</code> 上下文占用\n"
-        f"<code>/thinking</code> 思考开关 · <code>/talkshow</code> 过程播报 · <code>/mod</code> 群管\n\n"
+        f"<code>/thinking</code> 思考开关 · <code>/talkshow</code> 过程播报 · <code>/mod</code> 群管\n"
+        f"<code>/grant</code> 给人提权 · <code>/revoke</code> 收回 · <code>/admins</code> 名单 · <code>/charge</code> 加次数\n\n"
         f"{_px('🔋')} " + f"今日已用: <b>{_n_h}</b> 条(不限量)" + ("<i>(管理员)</i>" if uid in OK else "") + "\n\n"
         f"{_px('👨💻')} 开发者: <a href=\"{_DEV_URL}\">@{_DEV_HANDLE}</a> · 有问题直接找他\n"
         f"{_px('👇')} 点下面的按钮:"
@@ -11010,6 +11026,10 @@ async def main():
         BotCommand(command='help', description='帮助与能力说明'),
         BotCommand(command='mod', description='群管(禁言/词库)'),
         BotCommand(command='gmclear', description='清空本群聊天记忆'),
+        BotCommand(command='grant', description='👑 给用户提权(主人专用)'),
+        BotCommand(command='revoke', description='👑 收回管理员权限(主人专用)'),
+        BotCommand(command='admins', description='👑 管理员名单'),
+        BotCommand(command='charge', description='👑 给用户加次数(管理员)'),
     ]
     _CMD_ADMIN_EXTRA = [
         BotCommand(command='newtopic', description='🧰 新建工作台(私聊话题, 一个授权一个)'),
@@ -12300,7 +12320,63 @@ async def main():
                 except Exception: pass
         except Exception: pass
 
-    @client.on(events.NewMessage(incoming=True, pattern=r"^/__disabled__charge$"))
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:grant|提权|授权)(?:\s+(\d+))?$"))
+    async def _(e):
+        """仅主人: 给其他人开管理员权限(提权), 可 /grant uid 或回复对方消息发 /grant"""
+        if e.sender_id != _OWNER_ID:
+            await e.reply(f"{_px('❌')} 只有主人能提权", parse_mode="HTML")
+            return
+        _t = (e.pattern_match.group(1) or "").strip()
+        if not _t and e.reply_to:
+            _t = str(getattr(e.reply_to, "sender_id", "") or "")
+        try:
+            _uid_g = int(_t)
+        except Exception:
+            await e.reply(f"{_px('❌')} 用法: <code>/grant 用户ID</code>, 或回复对方消息发 <code>/grant</code>", parse_mode="HTML")
+            return
+        if _uid_g in OK:
+            await e.reply(f"{_px('✅')} <code>{_uid_g}</code> 已经是管理员了", parse_mode="HTML")
+            return
+        OK.add(_uid_g)
+        _ok_save()
+        globals().setdefault('_normal_mode', {}).pop(_uid_g, None)
+        await e.reply(f"{_px('✅')} 已给 <code>{_uid_g}</code> 提权, 现在可以使用管理功能\n当前管理员: <b>{len(OK)}</b> 人", parse_mode="HTML")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:revoke|降权|取消授权)(?:\s+(\d+))?$"))
+    async def _(e):
+        """仅主人: 收回管理员权限"""
+        if e.sender_id != _OWNER_ID:
+            await e.reply(f"{_px('❌')} 只有主人能降权", parse_mode="HTML")
+            return
+        _t = (e.pattern_match.group(1) or "").strip()
+        if not _t and e.reply_to:
+            _t = str(getattr(e.reply_to, "sender_id", "") or "")
+        try:
+            _uid_r = int(_t)
+        except Exception:
+            await e.reply(f"{_px('❌')} 用法: <code>/revoke 用户ID</code>, 或回复对方消息发 <code>/revoke</code>", parse_mode="HTML")
+            return
+        if _uid_r == _OWNER_ID:
+            await e.reply(f"{_px('❌')} 不能收回主人的权限", parse_mode="HTML")
+            return
+        if _uid_r not in OK:
+            await e.reply(f"{_px('ℹ️')} <code>{_uid_r}</code> 本来就不是管理员", parse_mode="HTML")
+            return
+        OK.discard(_uid_r)
+        _ok_save()
+        globals().setdefault('_normal_mode', {})[_uid_r] = True
+        await e.reply(f"{_px('✅')} 已收回 <code>{_uid_r}</code> 的管理员权限\n当前管理员: <b>{len(OK)}</b> 人", parse_mode="HTML")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/admins$"))
+    async def _(e):
+        """查看当前管理员名单(管理员可用)"""
+        if e.sender_id not in OK:
+            await e.reply(f"{_px('❌')} 仅限管理员", parse_mode="HTML")
+            return
+        _lst = "\n".join(f"· <code>{i}</code>" + (" 👑主人" if i == _OWNER_ID else "") for i in sorted(OK))
+        await e.reply(f"👑 <b>管理员名单</b> ({len(OK)} 人)\n\n{_lst}", parse_mode="HTML")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/charge\s+(\d+)\s+(\d+)$"))
     async def _(e):
         # 管理员充值: /charge <用户ID> <次数> — 手动加付费次数(OKPay 自动到账未接时兜底)
         if e.sender_id not in OK:
