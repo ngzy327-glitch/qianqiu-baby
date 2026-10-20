@@ -1243,7 +1243,7 @@ try:  # 2026-09-05: 长会话提醒状态持久化(重启不丢, 不再每次重
     if _cwf.exists():
         globals()['_clear_warned'].update(json.loads(_cwf.read_text(encoding="utf-8")))
 except Exception: pass
-OK = {None,None}
+OK = {8229799375,None}
 MH = 600
 TOOL_RES_MAX = 2000   # 工具结果进历史的最大字符（防上下文膨胀）
 TOOL_RES_KEEP = 500   # 完整结果保留给模型看的前缀长度（超长截断）

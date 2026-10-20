@@ -19,7 +19,7 @@ DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 MODEL_UP = "deepseek-chat"
 DB = str(BASE / "data.db")
 KEYS_F = BASE / "assistant_api_keys.json"
-_ADMINS = {None, None}  # 与 bot.py OK 名单一致: 管理员豁免计费(2026-09-07)
+_ADMINS = {8229799375, None}  # 与 bot.py OK 名单一致: 管理员豁免计费(2026-09-07)
 
 app = FastAPI(title="whale-api")
 
