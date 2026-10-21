@@ -1,0 +1,18 @@
+{
+ "name": "web_visit",
+ "description": "带指纹隔离的网页访问: 用指定身份模板(UA/视口/时区/语言/代理)打开网页拿正文/截图。profile=模板名(browser_profiles.json 里配, list 查看), action=text(默认)/html/screenshot。访问带指纹检测的网页、或要按地区/设备身份看页面差异时用。合规: 仅用于自有系统测试/隐私保护/多账号各自正常浏览, 不用于绕过金融/支付/限购等反欺诈风控。",
+ "schema": {
+  "type": "object",
+  "properties": {
+   "url": {"type": "string", "description": "目标网页"},
+   "profile": {"type": "string", "description": "指纹模板名(如 mobile_cn / desktop_us), list=列出全部"},
+   "action": {"type": "string", "enum": ["text", "html", "screenshot"], "description": "text=正文(默认) / html=源码 / screenshot=截图"},
+   "out": {"type": "string", "description": "screenshot 时的保存路径, 默认 /tmp/web_visit.png"},
+   "timeout": {"type": "integer", "description": "超时秒数, 默认45"}
+  },
+  "required": ["url"]
+ },
+ "exec": "/opt/deepseek-bot/knowledge/toolPlugins/web_visit.py",
+ "admin_only": true,
+ "timeout": 90
+}
