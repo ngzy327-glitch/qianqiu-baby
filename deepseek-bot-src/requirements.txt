@@ -19,6 +19,7 @@ uvicorn>=0.29
 python-multipart>=0.0.9
 
 # ==== 可选能力(装了才有对应功能) ====
+# python-socks[asyncio]>=1.2  # 多账号独立代理出口(accounts.json 里配 proxy 时需要)
 # faster-whisper>=1.0      # 本地语音识别
 # edge-tts>=7.0            # 语音合成
 # ddddocr>=1.5             # 本地验证码识别

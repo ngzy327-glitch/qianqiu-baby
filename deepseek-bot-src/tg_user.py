@@ -21,9 +21,12 @@ TG 多账号控制面板 — 支持任意数量账号(配置在 accounts.json)
 
 账号配置:
   编辑 /opt/deepseek-bot/accounts.json (不存在则自动生成模板):
-  {"accounts": {"acct1": {"session": "/abs/path/account1.session", "name": "工作号", "phone": "+86xxx", "username": "@xxx", "tg_id": 123456},
-                "acct2": {...}}}
+  {"accounts": {"acct1": {"session": "/abs/path/account1.session", "name": "工作号", "phone": "+86xxx", "username": "@xxx", "tg_id": 123456,
+                          "device": {"device_model":"iPhone 15 Pro","system_version":"iOS 17.5","app_version":"10.9","lang_code":"zh-hans"},
+                "acct2": {"session": "...", "name": "备用号", ...,
+                          "proxy": {"type":"socks5","host":"1.2.3.4","port":1080,"user":"","pass":""}}}}
   加号 = 往 accounts.json 里加一条 + 用 telethon 登录一次生成 session 文件。
+  指纹隔离: device=每号独立设备指纹; proxy=每号独立代理出口(需 pip install python-socks[asyncio])。
 """
 
 import os
@@ -144,7 +147,31 @@ async def get_client(account_name):
     if not API_ID or not API_HASH:
         print("ERROR: 未配置 TG_API_ID / TG_API_HASH (.env)")
         return None, None
-    client = TelegramClient(cfg["session"], API_ID, API_HASH)
+    # 指纹隔离(2026-10-22): 每账号独立的设备指纹 + 可选独立代理出口。
+    # accounts.json 里每号可配:
+    #   "device": {"device_model":"iPhone 15 Pro","system_version":"iOS 17.5","app_version":"10.9","lang_code":"zh-hans","system_lang_code":"zh-Hans"}
+    #   "proxy": {"type":"socks5","host":"127.0.0.1","port":1080,"user":"","pass":""}  (或 http)
+    # 不配则沿用 Telethon 默认指纹 + 直连。
+    _dev = cfg.get("device") or {}
+    _kw = dict(
+        device_model=_dev.get("device_model") or None,
+        system_version=_dev.get("system_version") or None,
+        app_version=_dev.get("app_version") or None,
+        lang_code=_dev.get("lang_code") or None,
+        system_lang_code=_dev.get("system_lang_code") or None,
+    )
+    _kw = {k: v for k, v in _kw.items() if v}          # None 参数不传(保持默认)
+    _px = cfg.get("proxy") or None
+    if _px and _px.get("host"):
+        try:
+            import python_socks
+            _pt = {"socks5": python_socks.ProxyType.SOCKS5, "socks4": python_socks.ProxyType.SOCKS4,
+                   "http": python_socks.ProxyType.HTTP}.get(str(_px.get("type", "socks5")).lower())
+            _kw["proxy"] = (_pt, _px["host"], int(_px["port"]),
+                            bool(_px.get("user")), _px.get("user") or None, _px.get("pass") or None)
+        except ImportError:
+            print("WARN: 配了 proxy 但未装 python-socks (pip install python-socks[asyncio]), 本号直连")
+    client = TelegramClient(cfg["session"], API_ID, API_HASH, **_kw)
     client.flood_sleep_threshold = 15  # 2026-09-08: 120→15, 防 FloodWait 静默干等120s(双号操作卡顿元凶之一)
     await client.connect()
     if not await client.is_user_authorized():
