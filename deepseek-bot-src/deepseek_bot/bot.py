@@ -663,6 +663,12 @@ from .exploitation import (
     exploit_ysoserial_list, exploit_phpggc_list,
 )
 from .tools_manager import tool_detect, tool_detect_all, tool_list_missing
+# ===== 2026-10-21 VulnClaw 功能移植 =====
+from . import codec as _codec_mod
+from . import codescan as _codescan_mod
+from . import report_gen as _report_gen_mod
+from . import http_probe as _http_probe_mod
+from . import runtime_diff as _runtime_diff_mod
 from . import jailguard  # 2026-09-22 破甲增强四层(归因/编译/闭环/交付验证)
 from .state_engine import init as state_init, load as state_load, inject_context, delete_state, snapshot as state_snapshot
 from .memory_engine import (
@@ -3545,10 +3551,16 @@ TOOLS = [
  {"type":"function","function":{"name":"osint","description":"OSINT侦察:dns查DNS记录/whois查域名/subdomain子域名枚举(证书透明度+字典爆破)/tech技术栈指纹/full全量侦察/port端口banner。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["dns","whois","subdomain","tech","full","port"]},"target":{"type":"string"},"port":{"type":"integer"}},"required":["act","target"]}}},
  {"type":"function","function":{"name":"exploit","description":"Web漏洞利用:xxe(XML外部实体)/ssrf(服务端请求伪造,含云元数据+Gopher打Redis)/deser(反序列化)/ssti(模板注入,Jinja2/Twig/Velocity等)/lfi(本地文件包含)/jwt(JSON Web Token攻击).不传name返回该类型所有payload,传name返回指定payload. ysoserial_list列gadget/phpggc_list列链/hashcat哈希破解.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["xxe","ssrf","deser","ssti","lfi","jwt","ysoserial_list","phpggc_list","hashcat"]},"name":{"type":"string"},"target":{"type":"string"},"file":{"type":"string"},"command":{"type":"string"},"url":{"type":"string"},"oob_server":{"type":"string"},"hash_file":{"type":"string"},"hash_mode":{"type":"integer"},"wordlist":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"tools","description":"工具管理器:detect检测单个工具/detect_all检测所有工具/missing列出未安装工具。支持38+红队工具自动检测。tool=工具名(如ysoserial/phpggc/hashcat/evil-winrm等)。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["detect","detect_all","missing"]},"tool":{"type":"string"}},"required":["act"]}}},
+# ===== 2026-10-21 VulnClaw 功能移植工具 =====
+ {"type":"function","function":{"name":"codec","description":"编解码/加解密工具箱:list列操作/b64e/b64d(base64)/b32e/b32d(base32)/b85e/b85d(base85)/hexe/hexd(十六进制)/urle/urld(URL编码)/htmle/htmld(HTML实体)/rot13/caesar(凯撒)/xor/xord(异或加解密,需key)/md5/sha1/sha256/sha512/hashall/morsec/morsed(摩斯)/jwt(解码JWT)/unie/unid(Unicode)/aese/aesd(AES加解密,需key)/auto(自动尝试多编码解码)。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","b64e","b64d","b32e","b32d","b85e","b85d","hexe","hexd","urle","urld","htmle","htmld","rot13","caesar","xor","xord","md5","sha1","sha256","sha512","hashall","morsec","morsed","jwt","unie","unid","aese","aesd","auto"]},"data":{"type":"string"},"key":{"type":"string"},"shift":{"type":"integer"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"codescan","description":"源码安全扫描:list列规则/file扫描本地文件/dir扫描目录/code扫描代码字符串(自动检测语言,支持php/python/java/javascript)。检测RCE/SQLI/XSS/LFI/XXE/反序列化/SSTI/SSRF等漏洞。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","file","dir","code"]},"path":{"type":"string"},"code":{"type":"string"},"language":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"pocgen","description":"渗透测试报告 & PoC 生成:gen生成Markdown报告(需target和findings列表)/poc生成漏洞PoC脚本(sqli/xss/ssrf/lfi/rce/ssti/xxe/deserialization/path_traversal/open_redirect)/list列PoC类型/save保存报告文件/savepoc保存PoC文件。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["gen","poc","list","save","savepoc"]},"target":{"type":"string"},"findings":{"type":"string","description":"JSON格式发现列表"},"vuln_type":{"type":"string"},"param":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"httpprobe","description":"批量HTTP探测:probe单URL探测/batch批量URL探活/asset资产多端口探活/sensitive敏感文件目录扫描/audit响应头安全审计/list列功能。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["probe","batch","asset","sensitive","audit","list"]},"url":{"type":"string"},"urls":{"type":"string","description":"逗号或换行分隔的多个URL"},"host":{"type":"string"},"ports":{"type":"string"},"paths":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"rundiff","description":"运行时差分探测:sqli SQL注入差分检测(布尔/报错/时间盲注)/xss反射XSS检测/lfi本地文件包含检测/waf WAF行为拦截检测/response两URL响应差异分析/hpp参数污染测试/list列功能。url需含?或参数,param为测试参数名。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["sqli","xss","lfi","waf","response","hpp","list"]},"url":{"type":"string"},"url2":{"type":"string"},"param":{"type":"string"}},"required":["act","url"]}}},
 ]
 # ==================== 重型工具按需加载(关键词命中才挂载, 减轻模型负担) ====================
-HEAVY_NAMES = {"fofa","team","lateral","privesc","credential","adaptive_chain","api_attack","c2","strix","cloud","container","evasion","exfil","persist","antifor","exploit"}
-HEAVY_KW = {"lateral":("横向","横向移动"), "privesc":("提权","后门提权"), "credential":("凭证","密码喷洒","responder","喷密码"), "adaptive_chain":("自适应攻击","adaptive"), "api_attack":("api攻击","graphql","rest api攻击"), "c2":("c2","sliver","c2集成"), "strix":("strix",), "cloud":("云攻击","aws","azure","s3桶","云环境"), "container":("容器","docker","k8s","kubernetes","容器逃逸"), "evasion":("规避","免杀","evasion"), "exfil":("外传","外泄","打包数据","数据窃取","payload外发"), "fofa":("fofa","资产测绘","找后台"), "persist":("持久化","驻留","后门","开机自启"), "antifor":("痕迹清理","清日志","删痕迹","反取证"), "exploit":("xxe","ssrf","反序列化","ssti","模板注入","jwt攻击","webshell","反弹shell")}
+HEAVY_NAMES = {"fofa","team","lateral","privesc","credential","adaptive_chain","api_attack","c2","strix","cloud","container","evasion","exfil","persist","antifor","exploit","osint","shellgen","webshell","tools","codec","codescan","pocgen","httpprobe","rundiff"}
+HEAVY_KW = {"lateral":("横向","横向移动"), "privesc":("提权","后门提权"), "credential":("凭证","密码喷洒","responder","喷密码"), "adaptive_chain":("自适应攻击","adaptive"), "api_attack":("api攻击","graphql","rest api攻击"), "c2":("c2","sliver","c2集成"), "strix":("strix",), "cloud":("云攻击","aws","azure","s3桶","云环境"), "container":("容器","docker","k8s","kubernetes","容器逃逸"), "evasion":("规避","免杀","evasion"), "exfil":("外传","外泄","打包数据","数据窃取","payload外发"), "fofa":("fofa","资产测绘","找后台"), "persist":("持久化","驻留","后门","开机自启"), "antifor":("痕迹清理","清日志","删痕迹","反取证"), "exploit":("xxe","ssrf","反序列化","ssti","模板注入","jwt攻击","webshell","反弹shell"), "osint":("osint","侦察","dns","whois","子域名","指纹","端口banner","信息收集"), "shellgen":("反弹shell","bind shell","绑定shell","msfvenom","生成shell","shell生成器"), "webshell":("webshell","一句话木马","蚁剑","冰蝎","哥斯拉","内存马"), "tools":("工具检测","工具管理器","ysoserial","phpggc","hashcat","工具安装"), "codec":("编码","解码","加密","解密","base64","编解码","hash","哈希","xor","aes","jwt","摩斯","morse","rot13","凯撒"), "codescan":("代码审计","源码扫描","代码扫描","白盒","源码审计","代码漏洞","静态扫描","代码安全"), "pocgen":("poc","生成poc","漏洞报告","生成报告","渗透报告","poc脚本","报告生成"), "httpprobe":("http探测","批量探测","资产探活","目录扫描","敏感文件","指纹识别","批量url","存活探测","响应头"), "rundiff":("差分","注入检测","盲注","waf检测","参数污染","xss检测","sql注入检测","运行时差分")}
 # 2026-09-11 注: "team" 原在此表, 但 team 已进常驻 _TOOL_BASE(按需挂载会重复 → DeepSeek 400 "Tool names must be unique"), 故移除
 # 2026-09-22 收紧: 旧表含"查/写/逆/测/链接/url/网址/http"等**泛词** → 一句「查下天气」「写个文案」
 #   就命中 → 升 Pro(成本×3) + 强制 high 思考。现在只留**明确的专业任务词**。
@@ -10933,6 +10945,100 @@ def rt(n,a,chat_id=None,uid=None):
             if act=="missing":
                 return json.dumps(tool_list_missing(),ensure_ascii=False,indent=2)
             return f"tools: unknown act={act}"
+
+        # ===== 2026-10-21 VulnClaw 功能移植 =====
+        if n=="codec":
+            act=a.get("act","list")
+            data=a.get("data","")
+            key=a.get("key","")
+            cm=_codec_mod
+            if act=="list": return cm.codec_list()
+            m={"b64e":cm.b64_encode,"b64d":cm.b64_decode,"b32e":cm.b32_encode,"b32d":cm.b32_decode,
+               "b85e":cm.b85_encode,"b85d":cm.b85_decode,"hexe":cm.hex_encode,"hexd":cm.hex_decode,
+               "urle":cm.url_encode,"urld":cm.url_decode,"htmle":cm.html_encode,"htmld":cm.html_decode,
+               "rot13":cm.rot13,"md5":cm.md5,"sha1":cm.sha1,"sha256":cm.sha256,"sha512":cm.sha512,
+               "hashall":cm.hash_all,"morsec":cm.morse_encode,"morsed":cm.morse_decode,
+               "jwt":cm.jwt_decode,"unie":cm.unicode_encode,"unid":cm.unicode_decode,
+               "auto":cm.auto_decode}
+            if act in m: return m[act](data)
+            if act=="caesar": return cm.caesar(data,int(a.get("shift",3)))
+            if act=="xor": return cm.xor_encrypt(data,key)
+            if act=="xord": return cm.xor_decrypt_hex(data,key)
+            if act=="aese": return cm.aes_encrypt(data,key)
+            if act=="aesd": return cm.aes_decrypt(data,key)
+            return f"codec: unknown act={act}"
+
+        if n=="codescan":
+            act=a.get("act","list")
+            cs=_codescan_mod
+            if act=="list": return cs.codescan_list_rules()
+            if act=="file": return cs.scan_file(a.get("path",""))
+            if act=="dir":
+                exts=a.get("extensions","")
+                ext_list=[e.strip() for e in exts.split(",") if e.strip()] if exts else None
+                return cs.scan_directory(a.get("path",""),ext_list)
+            if act=="code":
+                return cs.scan_code(a.get("code",""),a.get("language","auto"))
+            return f"codescan: unknown act={act}"
+
+        if n=="pocgen":
+            act=a.get("act","list")
+            rg=_report_gen_mod
+            if act=="list": return rg.poc_list()
+            if act=="poc":
+                return rg.generate_poc(a.get("vuln_type","sqli"),a.get("target",""),param=a.get("param","id"))
+            if act=="gen":
+                try:
+                    findings=json.loads(a.get("findings","[]"))
+                except Exception:
+                    findings=[]
+                return rg.generate_report(a.get("target",""),findings)
+            if act=="save":
+                try:
+                    report=json.loads(a.get("findings","{}"))
+                except Exception:
+                    report={"target":"unknown","report":""}
+                return rg.save_report(report)
+            if act=="savepoc":
+                try:
+                    poc=json.loads(a.get("findings","{}"))
+                except Exception:
+                    poc={}
+                return rg.save_poc(poc)
+            return f"report: unknown act={act}"
+
+        if n=="httpprobe":
+            act=a.get("act","probe")
+            hp=_http_probe_mod
+            if act=="list": return hp.http_probe_list()
+            if act=="probe": return hp.probe_url(a.get("url",""))
+            if act=="batch":
+                urls=a.get("urls","")
+                if not urls and a.get("url"): urls=a.get("url")
+                url_list=[u.strip() for u in urls.replace(",","\n").split("\n") if u.strip()]
+                return hp.probe_batch(url_list)
+            if act=="asset":
+                ports=a.get("ports","")
+                port_list=[int(p.strip()) for p in ports.split(",") if p.strip()] if ports else None
+                return hp.probe_asset(a.get("host","") or a.get("url",""),port_list)
+            if act=="sensitive":
+                paths=a.get("paths","")
+                path_list=[p.strip() for p in paths.split(",") if p.strip()] if paths else None
+                return hp.scan_sensitive(a.get("url",""),path_list)
+            if act=="audit": return hp.audit_headers(a.get("url",""))
+            return f"httpprobe: unknown act={act}"
+
+        if n=="rundiff":
+            act=a.get("act","list")
+            rd=_runtime_diff_mod
+            if act=="list": return rd.runtime_diff_list()
+            if act=="sqli": return rd.diff_sqli(a.get("url",""),a.get("param","id"))
+            if act=="xss": return rd.diff_xss(a.get("url",""),a.get("param","q"))
+            if act=="lfi": return rd.diff_lfi(a.get("url",""),a.get("param","file"))
+            if act=="waf": return rd.diff_waf(a.get("url",""))
+            if act=="response": return rd.diff_response(a.get("url",""),a.get("url2",""))
+            if act=="hpp": return rd.diff_param_pollution(a.get("url",""),a.get("param","id"))
+            return f"rundiff: unknown act={act}"
 
         return f"?{n}"
     except Exception as e: return f"E:{e}"
