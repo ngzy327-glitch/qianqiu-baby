@@ -6,6 +6,18 @@
     <title>大肥鱼 · 控制台</title>
     <!-- Telegram 官方 WebApp SDK(MIT, telegram.org 提供) -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- 浏览器直开(无 Telegram initData 且未登录) → 自动跳转管理员登录页; Telegram 内打开不跳 -->
+    <script>
+      (function () {
+        try {
+          var h = location.hash || "", q = location.search || "";
+          var isTg = /tgWebAppData=/.test(h) || /[?&]init=/.test(q) ||
+                     (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData);
+          var hasHint = document.cookie.indexOf("ma_hint=1") >= 0;
+          if (!isTg && !hasHint) location.replace("/api/login");
+        } catch (e) {}
+      })();
+    </script>
     <script type="module" crossorigin src="./assets/index-D_OHC4wL.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-pTnbCuJi.css">
   </head>

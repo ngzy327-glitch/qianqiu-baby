@@ -227,6 +227,9 @@ async def login_submit(request: Request):
     _resp = RedirectResponse("/", status_code=302)
     _resp.set_cookie(SESSION_COOKIE, _make_session(_uid), max_age=SESSION_TTL,
                      httponly=True, secure=True, samesite="lax", path="/")
+    # 非 HttpOnly 的标记 Cookie: 前端用它判断"浏览器已登录", 避免再次跳登录页
+    _resp.set_cookie("ma_hint", "1", max_age=SESSION_TTL,
+                     httponly=False, secure=True, samesite="lax", path="/")
     print(f"[miniapp] 密码登录成功 ip={_ip} uid={_uid}", flush=True)
     return _resp
 
@@ -235,6 +238,7 @@ async def login_submit(request: Request):
 async def logout():
     _resp = JSONResponse({"ok": True})
     _resp.delete_cookie(SESSION_COOKIE, path="/")
+    _resp.delete_cookie("ma_hint", path="/")
     return _resp
 
 
