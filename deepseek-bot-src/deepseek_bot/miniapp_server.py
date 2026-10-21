@@ -25,11 +25,24 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote
 
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, RedirectResponse
 
 PORT = int(os.getenv("MINIAPP_PORT", "8901"))
 FILES_DIR = Path("/opt/deepseek-bot/miniapp_files")
 PUBLIC_URL = os.getenv("MINIAPP_PUBLIC_URL") or "https://YOUR_SERVER_IP.sslip.io"
+
+# ===== 2026-10-21 网页端账号登录 =====
+# 原来只认 Telegram initData, 电脑浏览器直接打开永远是「非管理员」。
+# 现在补一条密码登录: 登录后发 HttpOnly 签名 Cookie, /api/* 两条通道都认。
+# 密码只存 sha256, 不落明文; 可用环境变量覆盖。
+ADMIN_USER = os.getenv("MINIAPP_ADMIN_USER", "ngzy")
+ADMIN_PASS_SHA256 = os.getenv(
+    "MINIAPP_ADMIN_PASS_SHA256",
+    "2e958307645e33967a48607cf6b7a9717db75e11ad673cee103c9a6a6f8aefc1",
+)
+SESSION_COOKIE = "ma_session"
+SESSION_TTL = 7 * 86400
+_LOGIN_FAILS = {}      # ip -> [count, first_ts], 简单的登录失败限速
 
 app = FastAPI(title="大肥鱼 Mini App", docs_url=None, redoc_url=None)
 _BOT = None            # 延迟绑定: 由 bot 侧调用 start(bot_module) 注入, 免得循环 import
@@ -115,13 +128,128 @@ def _int(v, dflt=0):
         return dflt
 
 
+def _session_secret():
+    """Cookie 签名密钥: 优先 bot token, 兜底用密码哈希, 两者都不外泄"""
+    _t = os.getenv("DEEPSEEK_BOT_TOKEN", "") or ADMIN_PASS_SHA256
+    return hashlib.sha256(("miniapp-session|" + _t).encode()).digest()
+
+
+def _make_session(uid):
+    """生成 uid.exp.sig 形式的签名 Cookie 值"""
+    _exp = int(time.time()) + SESSION_TTL
+    _raw = f"{uid}.{_exp}"
+    _sig = hmac.new(_session_secret(), _raw.encode(), hashlib.sha256).hexdigest()
+    return f"{_raw}.{_sig}"
+
+
+def _check_session(val):
+    """校验 Cookie, 返回 uid 或 None"""
+    try:
+        _uid_s, _exp_s, _sig = str(val or "").split(".", 2)
+        _raw = f"{_uid_s}.{_exp_s}"
+        _calc = hmac.new(_session_secret(), _raw.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(_calc, _sig):
+            return None
+        if time.time() > int(_exp_s or 0):
+            return None
+        return int(_uid_s)
+    except Exception:
+        return None
+
+
+def _admin_uid():
+    """取白名单里的第一个管理员 uid, 作为密码登录身份"""
+    try:
+        _ok = sorted(int(x) for x in _b().OK)
+        return _ok[0] if _ok else 0
+    except Exception:
+        return 0
+
+
+def _cookie_ok_check(ip):
+    """登录失败限速: 10 分钟内最多 8 次"""
+    _now = time.time()
+    _rec = _LOGIN_FAILS.get(ip)
+    if not _rec or _now - _rec[1] > 600:
+        _LOGIN_FAILS[ip] = [0, _now]
+        return True
+    return _rec[0] < 8
+
+
+def _login_html(err=""):
+    _e = f'<div class="err">{err}</div>' if err else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 · 大肥鱼控制台</title><style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#111318;color:#e8eaf0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+.card{{width:min(360px,92vw);background:#191c23;border:1px solid #262a33;border-radius:16px;padding:26px 22px}}
+h1{{font-size:17px;margin:0 0 4px}}p.sub{{margin:0 0 18px;color:#7c8394;font-size:12px}}
+label{{display:block;font-size:12px;color:#9aa0ac;margin:12px 0 6px}}
+input{{width:100%;height:42px;border-radius:10px;border:1px solid #303542;background:#111318;color:#e8eaf0;padding:0 12px;font-size:15px}}
+input:focus{{outline:none;border-color:#4f7cff}}
+button{{width:100%;height:44px;margin-top:20px;border:0;border-radius:10px;background:#4f7cff;color:#fff;font-size:15px;font-weight:600}}
+button:active{{background:#3d66e0}}.err{{margin-top:14px;padding:9px 12px;border-radius:8px;background:#3a1d22;color:#ff9292;font-size:13px}}
+</style></head><body><form class="card" method="post" action="/api/login">
+<h1>大肥鱼 · 控制台</h1><p class="sub">管理员登录（浏览器访问用）</p>
+<label>账号</label><input name="u" autocomplete="username" required>
+<label>密码</label><input name="p" type="password" autocomplete="current-password" required>
+<button type="submit">登录</button>{_e}</form></body></html>"""
+
+
+@app.get("/api/login")
+async def login_page():
+    return HTMLResponse(_login_html())
+
+
+@app.post("/api/login")
+async def login_submit(request: Request):
+    _ip = request.client.host if request.client else "?"
+    if not _cookie_ok_check(_ip):
+        return HTMLResponse(_login_html("失败次数过多，请 10 分钟后再试"), status_code=429)
+    try:
+        _body = (await request.body()).decode("utf-8", "ignore")
+        _f = dict(parse_qsl(_body, keep_blank_values=True))
+    except Exception:
+        _f = {}
+    _u = str(_f.get("u") or "").strip()
+    _p = str(_f.get("p") or "")
+    _ph = hashlib.sha256(_p.encode()).hexdigest()
+    if not (hmac.compare_digest(_u, ADMIN_USER) and hmac.compare_digest(_ph, ADMIN_PASS_SHA256)):
+        _rec = _LOGIN_FAILS.setdefault(_ip, [0, time.time()])
+        _rec[0] += 1
+        print(f"[miniapp] 登录失败 ip={_ip} user={_u[:20]}", flush=True)
+        return HTMLResponse(_login_html("账号或密码错误"), status_code=401)
+    _uid = _admin_uid()
+    if not _uid:
+        return HTMLResponse(_login_html("bot 未就绪，请稍后重试"), status_code=503)
+    _LOGIN_FAILS.pop(_ip, None)
+    _resp = RedirectResponse("/", status_code=302)
+    _resp.set_cookie(SESSION_COOKIE, _make_session(_uid), max_age=SESSION_TTL,
+                     httponly=True, secure=True, samesite="lax", path="/")
+    print(f"[miniapp] 密码登录成功 ip={_ip} uid={_uid}", flush=True)
+    return _resp
+
+
+@app.post("/api/logout")
+async def logout():
+    _resp = JSONResponse({"ok": True})
+    _resp.delete_cookie(SESSION_COOKIE, path="/")
+    return _resp
+
+
 async def _require_admin(request: Request):
-    """依赖: 校验 initData + 必须是管理员(老板要求: 普通用户用不了)"""
+    """依赖: 校验 initData 或浏览器登录 Cookie + 必须是管理员"""
     B = _b()
     init_data = request.headers.get("X-Init-Data") or request.query_params.get("init") or ""
     user = _verify_init_data(init_data)
     if not user:
-        raise HTTPException(status_code=401, detail="initData 无效或已过期(请在 Telegram 里重新打开)")
+        # 浏览器通道: 密码登录后发的签名 Cookie
+        _cu = _check_session(request.cookies.get(SESSION_COOKIE))
+        if _cu:
+            return {"uid": _cu, "user": {"id": _cu, "first_name": ADMIN_USER}, "via": "pwd"}
+        raise HTTPException(status_code=401,
+                            detail="未登录：请在 Telegram 里打开，或访问 /api/login 用管理员账号登录")
     uid = _int(user.get("id"), 0)
     if not uid:
         raise HTTPException(status_code=401, detail="initData 里没有合法 user.id")
