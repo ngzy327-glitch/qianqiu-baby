@@ -7,22 +7,47 @@
     <!-- Telegram 官方 WebApp SDK(MIT, telegram.org 提供) -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <!--
-      2026-10-21 浏览器直开修复:
-      原来 App 在 INIT(Telegram initData) 为空时直接显示「请从 Telegram 里打开」, 一个请求都不发,
-      所以密码登录发的 Cookie 再有效也进不了控制台。
-      现在: 先探 /api/whoami ——
-        · Telegram 里打开(有 tgWebAppData / initData) → 原样加载;
-        · 浏览器 + 已登录 Cookie → 给 WebApp.initData 填占位值, 让 App 正常渲染(真鉴权走后端 Cookie);
-        · 浏览器 + 未登录 → 直接跳 /api/login。
-      模块脚本在探测完成后动态插入, 保证 api.ts 读取 initData 时已经有值。
+      2026-10-21 入口鉴权(第二版):
+      原来靠「URL 里有没有 tgWebAppData=」判断是不是在 Telegram, 但 in-app 浏览器会带一个
+      **空值**的 tgWebAppData, 于是被误判成 WebApp → 直接加载 App → initData 为空 →
+      卡在「请从 Telegram 里打开」, 既不跳登录页也不发请求。
+      现在不再猜: 先把能拿到的身份(initData / ?init=)带上探 /api/whoami,
+        · 身份有效 或 浏览器 Cookie 有效 → 加载 App(浏览器场景补占位 initData 让页面能渲染);
+        · 都没有 → 一律跳 /api/login 密码登录页(Telegram 内也能用)。
     -->
     <script>
       (function () {
-        var h = location.hash || "", q = location.search || "";
-        var tw = window.Telegram && window.Telegram.WebApp;
-        var isTg = /tgWebAppData=/.test(h) || /[?&]init=/.test(q) || !!(tw && tw.initData);
+        function parseQS(s) {
+          var o = {};
+          String(s || "").replace(/^[#?]/, "").split("&").forEach(function (p) {
+            if (!p) return;
+            var i = p.indexOf("=");
+            var k = decodeURIComponent(i < 0 ? p : p.slice(0, i));
+            var v = decodeURIComponent(i < 0 ? "" : p.slice(i + 1));
+            if (k) o[k] = v;
+          });
+          return o;
+        }
 
-        function boot() {
+        var hash = parseQS(location.hash);
+        var tw = window.Telegram && window.Telegram.WebApp;
+        var tgData = hash.tgWebAppData || (tw && tw.initData) || "";
+        var qInit = parseQS(location.search).init || "";
+        var initData = tgData || qInit;
+
+        // 有些 WebView 只把 tgWebAppData 放在 hash 里, SDK 没同步到 initData —— 手动补齐,
+        // 否则 api.ts 读到的 INIT 是空, 页面会渲染成「请从 Telegram 里打开」。
+        if (tgData && tw && !tw.initData) {
+          try { tw.initData = tgData; } catch (e) {}
+        }
+
+        function boot(cookieMode) {
+          if (cookieMode) {
+            try {
+              if (tw) tw.initData = "pwd";
+              else window.Telegram = { WebApp: { initData: "pwd" } };
+            } catch (e) {}
+          }
           var s = document.createElement("script");
           s.type = "module";
           s.crossOrigin = "anonymous";
@@ -30,17 +55,14 @@
           document.body.appendChild(s);
         }
 
-        if (isTg) { boot(); return; }
+        var opt = { credentials: "same-origin" };
+        if (initData) opt.headers = { "X-Init-Data": initData };
 
-        fetch("/api/whoami", { credentials: "same-origin" })
+        fetch("/api/whoami", opt)
           .then(function (r) { return r.json(); })
           .then(function (d) {
-            if (!d || d.auth !== true) { location.replace("/api/login"); return; }
-            try {
-              if (window.Telegram && window.Telegram.WebApp) window.Telegram.WebApp.initData = "pwd";
-              else window.Telegram = { WebApp: { initData: "pwd" } };
-            } catch (e) {}
-            boot();
+            if (d && d.auth === true) boot(!initData);
+            else location.replace("/api/login");
           })
           .catch(function () { location.replace("/api/login"); });
       })();
