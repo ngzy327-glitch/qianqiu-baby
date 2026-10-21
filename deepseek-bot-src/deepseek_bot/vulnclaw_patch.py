@@ -82,7 +82,7 @@ TOOL_DEFS = [
     }},
     {"type": "function", "function": {
         "name": "evidence",
-        "description": "证据层(证据记忆+流量存储+反幻觉闸门)。下结论/报flag/写报告前必须先用 act=verify 校验 claim 是否逐字出现在真实证据里, verified=false 的结论不得写入报告。act:list列证据/add存证据/search检索/view按id回查原文/stats统计/traffic_list列流量/traffic_view看原始报文(request|response|full)/traffic_repeat重放请求/traffic_sitemap按host聚合访问路径/verify反幻觉校验。",
+        "description": "证据层(证据记忆+流量存储+反幻觉闸门)。用户说『记住这条证据/存证据/记到证据库/把原文存下来』时, 必须用本工具 act=add 存原文, 不要用 memory(长期记忆)工具, 否则后续 verify 查不到。下结论/报flag/写报告前必须先用 act=verify 校验 claim 是否逐字出现在真实证据里, verified=false 的结论不得写入报告。act:list列证据/add存证据/search检索/view按id回查原文/stats统计/traffic_list列流量/traffic_view看原始报文(request|response|full)/traffic_repeat重放请求/traffic_sitemap按host聚合访问路径/verify反幻觉校验。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -130,7 +130,7 @@ HK_EXTRA = {
     "pocgen": ("poc", "生成poc", "漏洞报告", "生成报告", "渗透报告", "poc脚本", "报告生成"),
     "httpprobe": ("http探测", "批量探测", "资产探活", "目录扫描", "敏感文件", "指纹识别", "批量url", "存活探测", "响应头"),
     "rundiff": ("差分", "注入检测", "盲注", "waf检测", "参数污染", "xss检测", "sql注入检测", "运行时差分"),
-    "evidence": ("证据", "证据链", "流量记录", "重放", "原始报文", "反幻觉", "flag校验", "核实", "sitemap"),
+    "evidence": ("证据", "证据链", "存证据", "记住证据", "记证据", "证据库", "写进证据", "流量记录", "重放", "原始报文", "反幻觉", "flag校验", "核实", "sitemap"),
 }
 
 
