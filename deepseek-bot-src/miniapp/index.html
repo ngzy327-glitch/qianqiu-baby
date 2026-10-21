@@ -42,7 +42,17 @@
         }
 
         function boot(cookieMode) {
+          // 浏览器密码登录场景: initData 在官方 SDK 里是只读属性, 赋值可能静默失败,
+          // 所以把身份写进 URL 的 ?init= —— api.ts 的 INIT 会读这个参数, 一定生效。
+          // 后端对 'pwd' 这种非 initData 串会校验失败, 自动回落到签名 Cookie。
           if (cookieMode) {
+            try {
+              var u = new URL(location.href);
+              if (!u.searchParams.get("init")) {
+                u.searchParams.set("init", "pwd");
+                history.replaceState(null, "", u.pathname + u.search + u.hash);
+              }
+            } catch (e) {}
             try {
               if (tw) tw.initData = "pwd";
               else window.Telegram = { WebApp: { initData: "pwd" } };
