@@ -107,17 +107,6 @@ def _parse_args(act, args):
         if len(args) > 1 and args[1] is not None:
             return {"kwargs": (s(0, ""), n(1, 0))}
         return {"kwargs": (s(0, ""),)}
-    if act == "bulkwebapp":
-        arg = s(0, "")
-        bot_list = []
-        if arg and os.path.isfile(arg):
-            with open(arg, encoding="utf-8") as _f:
-                bot_list = [ln.strip() for ln in _f if ln.strip()]
-        else:
-            bot_list = [b.strip() for b in arg.replace(",", " ").split() if b.strip()]
-        return {"bot_list": bot_list}
-    if act == "initdata":
-        return {"bot_token": s(0, "")}
     if act == "groupinfo":
         return {"target": s(0, "")}
     if act == "user":
@@ -132,7 +121,45 @@ def _parse_args(act, args):
         return {"invite": s(0, "")}
     if act == "react":
         return {"target": s(0, ""), "msg_id": n(1, 0), "emoji": s(2, "👍")}
+    if act == "accounts":
+        return {}
+    if act == "unread":
+        return {"limit": n(0, 50)}
     return None
+
+
+# ==================== 操作护栏(2026-10-22) ====================
+# 分级: 只读直通; 写入类受频率限制 + 全量审计。AI 层的"先确认再执行"在 bot 提示词与 tg 工具描述里约束。
+READ_ACTS = {"dialogs", "messages", "msg", "search", "stats", "whois",
+             "members", "groupinfo", "user", "buttons", "accounts", "unread"}
+WRITE_ACTS = {"send", "react", "click", "join", "webapp"}
+AUDIT_LOG = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "audit.log")
+_W_RATE = {}          # account -> [ts, ...] 写操作时间戳
+_W_LIMIT = 10         # 每账号每分钟写操作上限(防 FloodWait/封号)
+
+
+def _rate_ok(account):
+    """写操作频率闸门: 超限时返回 False"""
+    now = time.time()
+    win = [t for t in _W_RATE.get(account, []) if now - t < 60]
+    if len(win) >= _W_LIMIT:
+        _W_RATE[account] = win
+        return False
+    win.append(now)
+    _W_RATE[account] = win
+    return True
+
+
+def _audit(account, act, args, ok, note=""):
+    """操作审计: JSONL 落盘, 每条含时间/账号/操作/参数摘要/结果"""
+    try:
+        rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "account": account,
+               "act": act, "args": [str(x)[:80] for x in (args or [])][:4],
+               "ok": bool(ok), "note": str(note)[:120]}
+        with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 async def _run_cmd(client, cfg, act, args):
@@ -188,18 +215,36 @@ async def handle(req):
     account = str(req.get("account", "acct1")).lower()
     act = str(req.get("act", "")).lower()
     args = req.get("args") or []
+    if act == "accounts":
+        # 列账号不需要 client 连接
+        try:
+            return await tg_user.cmd_accounts(None, None)
+        except Exception:
+            import io as _io, contextlib as _cl
+            _b = _io.StringIO()
+            with _cl.redirect_stdout(_b):
+                await tg_user.cmd_accounts(None, None)
+            return _b.getvalue().strip()
     if account not in tg_user.ACCOUNTS:
-        return "未知账号 '%s'" % account
+        return "未知账号 '%s'，可用: %s" % (account, " / ".join(tg_user.ACCOUNTS.keys()))
     if not act:
         return "缺少 act"
+    if act in WRITE_ACTS and not _rate_ok(account):
+        _audit(account, act, args, False, "rate_limited")
+        return "ERROR: 操作过于频繁(每账号每分钟写操作上限 %d 次), 请稍后" % _W_LIMIT
     c, cfg = await _get_client(account)
     if c is None:
+        _audit(account, act, args, False, "no_session")
         return "ERROR: 会话未授权/连接失败"
     try:
-        return await asyncio.wait_for(_run_cmd(c, cfg, act, args), timeout=60)
+        out = await asyncio.wait_for(_run_cmd(c, cfg, act, args), timeout=60)
+        _audit(account, act, args, not str(out).startswith("ERROR"), "write" if act in WRITE_ACTS else "read")
+        return out
     except asyncio.TimeoutError:
+        _audit(account, act, args, False, "timeout")
         return "TG命令超时(60s)"
     except Exception as e:
+        _audit(account, act, args, False, "%s" % type(e).__name__)
         return "ERROR: %s: %s" % (type(e).__name__, e)
 
 

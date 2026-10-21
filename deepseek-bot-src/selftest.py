@@ -2,8 +2,8 @@
 """大肥鱼自检 (selftest.py) — 一条命令出体检报告
 用法: cd /opt/deepseek-bot && .venv/bin/python selftest.py
 
-检查项: 服务/进程 · 插件 · 工具挂载与去重 · tg_daemon socket 与双号 · 配置(模型/推理/代理)
-        · 面板渲染(_bg_card) · 后台播报(吞/播逻辑) · 富文本转换 · AtkMeta 去特化 · 磁盘
+检查项: 服务/进程 · 插件 · 工具挂载与去重 · tg_daemon socket 与多号 · 配置(模型/推理/代理)
+        · 面板渲染(_bg_card) · 后台播报(吞/播逻辑) · 富文本转换 · 磁盘
 """
 import ast
 import glob
@@ -207,18 +207,6 @@ for t, want in TALK_CASES:
     _tk_ok += (got == want)
 (ok if _tk_ok == len(TALK_CASES) else bad)(f"播报吞/播判定 {_tk_ok}/{len(TALK_CASES)}")
 
-# AtkMeta 去特化
-try:
-    sys.path.insert(0, "/opt/deepseek-bot")
-    spec_src = open("/opt/deepseek-bot/deepseek_bot/atk_meta.py", encoding="utf-8").read()
-    ns2 = {}
-    exec(compile(spec_src, "atk_meta", "exec"), ns2)
-    r1 = ns2["normalize_chain"]("entry -> vuln:sqli -> cred -> foothold")
-    r2 = ns2["normalize_chain"]("今天天气不错")
-    (ok if r1 and not r2 else bad)("AtkMeta 去特化", f"合法链={r1} 垃圾链={r2}")
-except Exception as e:
-    warn("AtkMeta 自测跳过", str(e)[:100])
-
 print("=" * 64)
 print("⑥ 数据 / 磁盘")
 print("=" * 64)
@@ -227,12 +215,6 @@ try:
     ok("历史库可读", f"{len(h)} 会话 / {sum(len(v) for v in h.values() if isinstance(v, list))} 条 / {os.path.getsize('/opt/deepseek-bot/history.json')//1024}KB")
 except Exception as e:
     bad("历史库读取失败", str(e)[:100])
-try:
-    wc = json.load(open("/opt/deepseek-bot/knowledge/meta/winning_chains.json", encoding="utf-8"))
-    cnt = sum(len(v) for k, v in wc.items() if isinstance(v, list))
-    (ok if cnt >= 0 else warn)("自进化剧本库", f"{cnt} 条链")
-except Exception as e:
-    warn("剧本库读取失败", str(e)[:80])
 st = os.statvfs("/")
 pct = int((st.f_blocks - st.f_bavail) * 100 / st.f_blocks)
 (ok if pct < 85 else warn)(f"磁盘占用 {pct}%")

@@ -21,7 +21,6 @@ python-multipart>=0.0.9
 # ==== 可选能力(装了才有对应功能) ====
 # faster-whisper>=1.0      # 本地语音识别
 # edge-tts>=7.0            # 语音合成
-# capmonster_python>=1.2   # CapMonster 打码(需自备 key)
 # ddddocr>=1.5             # 本地验证码识别
 # paddleocr>=2.7           # 本地 OCR(占用较大)
 # jieba>=0.42              # 中文分词(RAG 检索用)

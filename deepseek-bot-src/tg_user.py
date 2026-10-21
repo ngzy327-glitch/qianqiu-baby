@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-🔥 TG 双号控制面板 — 账号A + 账号B
+TG 多账号控制面板 — 支持任意数量账号(配置在 accounts.json)
 用法:
-  python3 tg_user.py acct1 dialogs [数量]           账号A-最近对话
-  python3 tg_user.py acct1 messages <群> [条数] [起始消息ID] [raw]     账号A-读群消息 (raw=输出完整JSON含reply_markup)
-  python3 tg_user.py acct1 msg <群> <消息ID> [raw]    账号A-按消息ID读单条(含发送者/时间/媒体/按钮)
-  python3 tg_user.py acct1 send <目标> <消息文本>    账号A-发消息
-  python3 tg_user.py acct1 click <群> <消息ID> <行> <列>   账号A-点击消息按钮
-  python3 tg_user.py acct1 buttons <群> <消息ID>      账号A-查看消息按钮
-  python3 tg_user.py acct1 webapp <bot用户名>        账号A-直接打开bot的WebApp拿URL/initData
-  python3 tg_user.py acct1 webapp <群> <消息ID>       账号A-从消息按钮打开小程序
-  python3 tg_user.py acct1 initdata <bot_token>      账号A-构造WebApp initData
-  python3 tg_user.py acct1 user <用户名/手机号/ID>   账号A-查用户
-  python3 tg_user.py acct1 search <群> <关键词>      账号A-搜索消息
-  python3 tg_user.py acct1 stats <群名> [条数] [起始消息ID]       账号A-群活跃统计
-  python3 tg_user.py acct1 whois <群名> [条数] [起始消息ID]       账号A-发言排行
-  python3 tg_user.py acct1 members <群名> [条数]     账号A-群成员列表
-  python3 tg_user.py acct1 join <群链接/邀请码>       账号A-加群
-  python3 tg_user.py acct1 react <群> <消息ID> <👍/❤️/🔥/😂/💩>  账号A-点赞/反应
-  
-  # 账号B同理: python3 tg_user.py acct2 ...
+  python3 tg_user.py <账号> dialogs [数量]            最近对话
+  python3 tg_user.py <账号> messages <群> [条数] [起始消息ID] [raw]     读群消息 (raw=输出完整JSON含reply_markup)
+  python3 tg_user.py <账号> msg <群> <消息ID> [raw]    按消息ID读单条(含发送者/时间/媒体/按钮)
+  python3 tg_user.py <账号> send <目标> <消息文本>     发消息
+  python3 tg_user.py <账号> click <群> <消息ID> <行> <列>   点击消息按钮
+  python3 tg_user.py <账号> buttons <群> <消息ID>      查看消息按钮
+  python3 tg_user.py <账号> webapp <bot用户名>        直接打开bot的WebApp拿URL/initData
+  python3 tg_user.py <账号> webapp <群> <消息ID>       从消息按钮打开小程序
+  python3 tg_user.py <账号> user <用户名/手机号/ID>    查用户
+  python3 tg_user.py <账号> search <群> <关键词>       搜索消息
+  python3 tg_user.py <账号> stats <群名> [条数] [起始消息ID]       群活跃统计
+  python3 tg_user.py <账号> whois <群名> [条数] [起始消息ID]       发言排行
+  python3 tg_user.py <账号> members <群名> [条数]      群成员列表
+  python3 tg_user.py <账号> join <群链接/邀请码>        加群
+  python3 tg_user.py <账号> react <群> <消息ID> <👍/❤️/🔥/😂/💩>  点赞/反应
+  python3 tg_user.py accounts                        列出所有账号及状态
 
-账号:
-  acct1   = 账号A (+10000000000)   @YOUR_ACCOUNT
-  acct2  = 账号B (+10000000000)       @YOUR_ACCOUNT
+账号配置:
+  编辑 /opt/deepseek-bot/accounts.json (不存在则自动生成模板):
+  {"accounts": {"acct1": {"session": "/abs/path/account1.session", "name": "工作号", "phone": "+86xxx", "username": "@xxx", "tg_id": 123456},
+                "acct2": {...}}}
+  加号 = 往 accounts.json 里加一条 + 用 telethon 登录一次生成 session 文件。
 """
 
 import os
@@ -38,10 +38,22 @@ from telethon.tl.types import PeerUser
 from telethon.tl.types import PeerChannel, PeerChat, ReactionEmoji
 from telethon.errors import SessionPasswordNeededError
 
-API_ID = 2047129
-API_HASH = "c8c5c2f0e4f1e3a6b9d8f7e6a5b4c3d2"
+API_ID = int(os.getenv("TG_API_ID", "0") or 0)
+API_HASH = os.getenv("TG_API_HASH", "")
+if not API_ID or not API_HASH:
+    # 与 .env 对齐: 读 /opt/deepseek-bot/.env
+    try:
+        from dotenv import load_dotenv as _ld
+        _ld(os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), ".env"), override=False)
+        API_ID = int(os.getenv("TG_API_ID", "0") or 0)
+        API_HASH = os.getenv("TG_API_HASH", "")
+    except Exception:
+        pass
 
-ACCOUNTS = {
+_ACCOUNTS_FILE = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "accounts.json")
+
+# 内置占位(accounts.json 不存在时使用; 部署时改成你自己的账号)
+_ACCOUNTS_FALLBACK = {
     "acct1": {
         "session": "/opt/deepseek-bot/sessions/account1.session",
         "name": "账号A",
@@ -49,14 +61,31 @@ ACCOUNTS = {
         "username": "@YOUR_ACCOUNT",
         "tg_id": None,
     },
-    "acct2": {
-        "session": "/opt/deepseek-bot/sessions/account2.session",
-        "name": "账号B",
-        "phone": "+10000000000",
-        "username": "@YOUR_ACCOUNT",
-        "tg_id": None,
-    },
 }
+
+
+def _load_accounts():
+    """从 accounts.json 加载多账号配置; 文件不存在则自动生成模板并回落到内置占位"""
+    try:
+        if os.path.exists(_ACCOUNTS_FILE):
+            data = json.load(open(_ACCOUNTS_FILE, encoding="utf-8"))
+            accs = data.get("accounts") if isinstance(data, dict) else None
+            if isinstance(accs, dict) and accs:
+                return accs
+        else:
+            # 自动生成模板, 填好就能用
+            try:
+                os.makedirs(os.path.dirname(_ACCOUNTS_FILE), exist_ok=True)
+                with open(_ACCOUNTS_FILE, "w", encoding="utf-8") as _f:
+                    json.dump({"accounts": _ACCOUNTS_FALLBACK}, _f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return dict(_ACCOUNTS_FALLBACK)
+
+
+ACCOUNTS = _load_accounts()
 
 
 def get_all_usernames(user):
@@ -110,7 +139,10 @@ def extract_msg_text(m):
 async def get_client(account_name):
     cfg = ACCOUNTS.get(account_name)
     if not cfg:
-        print(f"ERROR: 未知账号 '{account_name}'，可用: acct1 / acct2")
+        print(f"ERROR: 未知账号 '{account_name}'，可用: {' / '.join(ACCOUNTS.keys()) or '(accounts.json 为空)'}")
+        return None, None
+    if not API_ID or not API_HASH:
+        print("ERROR: 未配置 TG_API_ID / TG_API_HASH (.env)")
         return None, None
     client = TelegramClient(cfg["session"], API_ID, API_HASH)
     client.flood_sleep_threshold = 15  # 2026-09-08: 120→15, 防 FloodWait 静默干等120s(双号操作卡顿元凶之一)
@@ -560,51 +592,36 @@ async def relay_bot_webapp(client, bot_uname):
     return {'bot': bot_uname, 'webapp_url': webapp_url, 'wv_url': wv_url,
             'init_data': init_data or None}
 
-async def cmd_bulkwebapp(client, cfg, bot_list):
-    """批量对多个 bot 取 webapp/initData, 结果落盘+打印。
-    bot_list: 每行一个 @username / 空格分隔/完整 t.me 链接 均可"""
-    import json, os, time as _t
-    results = []
-    for raw in bot_list:
-        raw = raw.strip().lstrip('@')
-        if not raw:
-            continue
-        if 't.me/' in raw:
-            raw = raw.split('t.me/')[-1].split('/')[0].split('?')[0]
-        print(f"\n===== @{raw} =====")
-        try:
-            r = await relay_bot_webapp(client, raw)
-            ok = bool(r.get('init_data'))
-            r['ok'] = ok
-            results.append(r)
-            if ok:
-                print(f"  ✅ webapp_url = {r['webapp_url']}")
-                print(f"  ✅ initData len={len(r['init_data'])}")
-                print(f"     hash 前20: {_extract_hash(r['init_data'])}")
-            else:
-                print(f"  ❌ 拿到webview但没 initData")
-        except Exception as ex:
-            print(f"  ❌ {ex}")
-            results.append({'bot': raw, 'ok': False, 'error': str(ex)[:200]})
-        await asyncio.sleep(0.6)  # 防 flood
-    # 落盘
-    outdir = '/opt/deepseek-bot/webapp_harvest'
-    os.makedirs(outdir, exist_ok=True)
-    ts = _t.strftime('%Y%m%d_%H%M%S')
-    fname = f"{outdir}/wallet_{cfg['name']}_{ts}.json"
-    with open(fname, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    good = sum(1 for r in results if r.get('ok'))
-    print(f"\n📦 完成 {len(results)} 目标, 成功 {good} → 已存 {fname}")
-    print(f"   汇总行: {fname}")
+async def cmd_accounts(client, cfg, *_, **__):
+    """列出所有配置的账号及当前状态(哪个在线)"""
+    print("已配置账号:")
+    for name, c in ACCOUNTS.items():
+        sess_ok = os.path.exists(str(c.get("session", "")))
+        cur = " ← 当前连接" if client and c is cfg else ""
+        print(f"  · {name}: {c.get('name','?')} {c.get('username','')} "
+              f"session={'✅' if sess_ok else '❌ 未登录'}{cur}")
+    print(f"\n共 {len(ACCOUNTS)} 个账号; 加号: 编辑 accounts.json 加一条, 再登录生成 session")
 
-def _extract_hash(init_data):
-    import urllib.parse as _up
-    try:
-        q = _up.parse_qs(init_data)
-        return (q.get('hash',[''])[0])[:24]
-    except Exception:
-        return ''
+
+async def cmd_unread(client, cfg, limit=50):
+    """未读摘要: 只列有未读消息/被@的会话(AI 管家每天早上汇报用)"""
+    rows = []
+    async for d in client.iter_dialogs(limit=int(limit)):
+        unread = int(getattr(d, "unread_count", 0) or 0)
+        mentions = int(getattr(d, "unread_mentions_count", 0) or 0)
+        if not (unread or mentions):
+            continue
+        name = d.name or str(d.id)
+        kind = "群" if getattr(d, "is_group", False) else ("频道" if getattr(d, "is_channel", False) else "私聊")
+        mark = f" 🔔@你{mentions}次" if mentions else ""
+        rows.append(f"[{kind}] {name} | 未读 {unread}{mark} | id={d.id}")
+    if not rows:
+        print("✅ 没有未读会话")
+        return
+    print(f"📬 未读会话 {len(rows)} 个 (按最近活动排序):")
+    for r in rows:
+        print("  " + r)
+
 
 async def cmd_webapp(client, cfg, target, msg_id=None):
     """打开 WebApp 拿 webview URL + initData
@@ -832,55 +849,6 @@ async def cmd_webapp(client, cfg, target, msg_id=None):
                 print(f"  ❌ 打开失败: {type(ex).__name__}: {ex}")
     except Exception as ex:
         print(f"❌ WebApp 读取失败: {type(ex).__name__}: {ex}")
-
-
-def gen_initdata(bot_token: str, user_id: int, extra: dict = None):
-    """构造 Telegram WebApp initData (HMAC-SHA256 签名)
-    官方 WebAppInitData 现支持: query_id/user/auth_date/hash + 可选
-    chat_id/chat_type/chat_instance/start_param/can_send_after/
-    chat_join_request_query_id(10.1) 等——全部字段按 key 排序参与签名。
-    extra 里除 'user' 外的标量字段会一并扣入 data_check 并按字母序签名。"""
-    import time, hmac, hashlib, urllib.parse
-    import json as _json
-    extra = extra or {}
-    auth_date = int(time.time())
-    user_obj = {"id": user_id, "first_name": "User", "last_name": "", "username": "user", "language_code": "en"}
-    if extra.get("user"):
-        user_obj.update(extra["user"])
-    user_str = _json.dumps(user_obj, separators=(',', ':'))
-
-    # 默认顶层标量字段(排除已特殊处理的 hash/user)
-    top = {}
-    if extra.get("query_id"):
-        top["query_id"] = extra["query_id"]
-    for _k in ("chat_id", "chat_type", "chat_instance", "start_param",
-               "can_send_after", "chat_join_request_query_id"):  # 10.1新字段
-        if extra.get(_k) is not None:
-            top[_k] = str(extra[_k])
-    # user 总是带上
-    top["user"] = user_str
-    # auth_date 未指定用当前
-    top.setdefault("auth_date", str(auth_date))
-
-    # data_check = 所有字段(去 hash)按 key 字典序拼 "k=v"，换行分隔
-    data_check = "\n".join(
-        f"{k}={v}" for k, v in sorted(top.items()) if k != "hash")
-    secret_key = hmac.new(bot_token.encode(), b"WebAppData", hashlib.sha256).digest()
-    h = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
-    top["hash"] = extra.get("hash", h)
-
-    parts = [f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in top.items()]
-    return "&".join(parts)
-
-
-async def cmd_initdata(client, cfg, bot_token):
-    """构造 Telegram WebApp initData"""
-    me = await client.get_me()
-    uid = me.id
-    init_data = gen_initdata(bot_token, uid)
-    print(f"🧑 用户ID: {uid}")
-    print(f"🔑 initData:\n{init_data}")
-    print(f"\n💡 用法: 发给需要 initData 的小程序/网页，或配合 webapp 命令使用")
 
 
 async def cmd_send(client, cfg, target, text):
@@ -1361,8 +1329,11 @@ async def main():
         return
 
     account = sys.argv[1].lower()
+    if account == "accounts":
+        await cmd_accounts(None, None)
+        return
     if account not in ACCOUNTS:
-        print(f"未知账号 '{account}'，可用: acct1 / acct2")
+        print(f"未知账号 '{account}'，可用: {' / '.join(ACCOUNTS.keys()) or '(accounts.json 为空)'}")
         print(__doc__)
         return
 
@@ -1426,22 +1397,6 @@ async def main():
                 await cmd_webapp(client, cfg, target, msg_id)
             else:
                 await cmd_webapp(client, cfg, target)
-        elif cmd == "bulkwebapp":
-            arg = sys.argv[3] if len(sys.argv) > 3 else ""
-            bot_list = []
-            if arg and os.path.isfile(arg):
-                with open(arg, encoding='utf-8') as _f:
-                    bot_list = [ln.strip() for ln in _f if ln.strip()]
-            else:
-                bot_list = [b.strip() for b in arg.replace(',', ' ').split() if b.strip()]
-            if not bot_list:
-                print("用法: bulkwebapp \"@bot1 @bot2...\" 或 bulkwebapp bots.txt")
-                return
-            await cmd_bulkwebapp(client, cfg, bot_list)
-        elif cmd == "initdata":
-            # 构造 initData: initdata <bot_token>
-            bot_token = sys.argv[3]
-            await cmd_initdata(client, cfg, bot_token)
         elif cmd == "groupinfo":
             target = sys.argv[3] if len(sys.argv) > 3 else ""
             await cmd_groupinfo(client, cfg, target)
@@ -1478,7 +1433,7 @@ async def main():
             await cmd_react(client, cfg, target, msg_id, emoji)
         else:
             print(f"未知操作 '{cmd}'")
-            print("可用: dialogs messages send user search stats whois members join react")
+            print("可用: dialogs messages msg send click buttons webapp user search stats whois members join react accounts")
     except Exception as _e:
         # 参数错误/执行失败: 干净报错, 不出traceback
         if "database is locked" in str(_e):

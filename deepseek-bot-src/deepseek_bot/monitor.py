@@ -119,8 +119,8 @@ def _verify_with_web(items) -> list:
 
 def _fetch_web_news() -> list:
     """抓取网络资讯（搜索热榜/新闻），返回 [(来源, 标题, 链接), ...]"""
-    topics = ["加密货币 今日", "AI 人工智能 最新", "区块链 大新闻", "金融 宏观 今日",
-              "网络安全 漏洞 CVE 最新", "渗透测试 安全情报", "CVE 漏洞 今日披露"]
+    topics = ["加密货币 今日", "AI 人工智能 最新", "科技 大新闻", "金融 宏观 今日",
+              "互联网 产品 动态", "Telegram 新功能", "编程 技术 今日"]
     news = []
     for t in topics:
         res = web_search(t, max_results=3)
