@@ -4,8 +4,16 @@ type TGWebApp = { initData?: string; ready?: () => void; expand?: () => void; se
 declare global { interface Window { Telegram?: { WebApp?: TGWebApp } } }
 
 export const TG = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined
+/**
+ * 2026-10-21 INIT 判断修复:
+ *   原来 INIT 为空时, App 会直接渲染「请从 Telegram 里打开」, 一个请求都不发 ——
+ *   于是浏览器密码登录下发的 Cookie 再有效也进不去; Telegram in-app 浏览器带了空值
+ *   tgWebAppData 时也会掉进同一个坑。
+ *   现在空值一律回落到 'pwd'(不是合法 initData): 后端校验必然失败后自动转用签名 Cookie,
+ *   鉴权结果以 /api/state 的 200/401 为准, 前端不再自己猜环境。
+ */
 export const INIT: string =
-  (TG && TG.initData) || new URLSearchParams(location.search).get('init') || ''
+  (TG && TG.initData) || new URLSearchParams(location.search).get('init') || 'pwd'
 
 /** 当前用户(从 initData 里解出来): 名字 + Telegram 头像 */
 export const ME: { id?: number; name?: string; photo?: string } = (() => {
@@ -38,6 +46,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   if (!r.ok) {
     let d = ''
     try { d = (await r.json()).detail || '' } catch { /* ignore */ }
+    // 未登录/会话过期 → 直接去密码登录页, 而不是留一张点不动的错误卡片
+    if (r.status === 401) {
+      try { location.replace('/api/login') } catch { /* ignore */ }
+    }
     const msg = d || (r.status === 401 ? '需要在 Telegram 里打开(initData 无效)' : r.status === 403 ? '仅管理员可用' : 'HTTP ' + r.status)
     throw new Error(msg)
   }

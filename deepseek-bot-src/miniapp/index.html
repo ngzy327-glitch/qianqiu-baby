@@ -6,78 +6,8 @@
     <title>大肥鱼 · 控制台</title>
     <!-- Telegram 官方 WebApp SDK(MIT, telegram.org 提供) -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!--
-      2026-10-21 入口鉴权(第二版):
-      原来靠「URL 里有没有 tgWebAppData=」判断是不是在 Telegram, 但 in-app 浏览器会带一个
-      **空值**的 tgWebAppData, 于是被误判成 WebApp → 直接加载 App → initData 为空 →
-      卡在「请从 Telegram 里打开」, 既不跳登录页也不发请求。
-      现在不再猜: 先把能拿到的身份(initData / ?init=)带上探 /api/whoami,
-        · 身份有效 或 浏览器 Cookie 有效 → 加载 App(浏览器场景补占位 initData 让页面能渲染);
-        · 都没有 → 一律跳 /api/login 密码登录页(Telegram 内也能用)。
-    -->
-    <script>
-      (function () {
-        function parseQS(s) {
-          var o = {};
-          String(s || "").replace(/^[#?]/, "").split("&").forEach(function (p) {
-            if (!p) return;
-            var i = p.indexOf("=");
-            var k = decodeURIComponent(i < 0 ? p : p.slice(0, i));
-            var v = decodeURIComponent(i < 0 ? "" : p.slice(i + 1));
-            if (k) o[k] = v;
-          });
-          return o;
-        }
-
-        var hash = parseQS(location.hash);
-        var tw = window.Telegram && window.Telegram.WebApp;
-        var tgData = hash.tgWebAppData || (tw && tw.initData) || "";
-        var qInit = parseQS(location.search).init || "";
-        var initData = tgData || qInit;
-
-        // 有些 WebView 只把 tgWebAppData 放在 hash 里, SDK 没同步到 initData —— 手动补齐,
-        // 否则 api.ts 读到的 INIT 是空, 页面会渲染成「请从 Telegram 里打开」。
-        if (tgData && tw && !tw.initData) {
-          try { tw.initData = tgData; } catch (e) {}
-        }
-
-        function boot(cookieMode) {
-          // 浏览器密码登录场景: initData 在官方 SDK 里是只读属性, 赋值可能静默失败,
-          // 所以把身份写进 URL 的 ?init= —— api.ts 的 INIT 会读这个参数, 一定生效。
-          // 后端对 'pwd' 这种非 initData 串会校验失败, 自动回落到签名 Cookie。
-          if (cookieMode) {
-            try {
-              var u = new URL(location.href);
-              if (!u.searchParams.get("init")) {
-                u.searchParams.set("init", "pwd");
-                history.replaceState(null, "", u.pathname + u.search + u.hash);
-              }
-            } catch (e) {}
-            try {
-              if (tw) tw.initData = "pwd";
-              else window.Telegram = { WebApp: { initData: "pwd" } };
-            } catch (e) {}
-          }
-          var s = document.createElement("script");
-          s.type = "module";
-          s.crossOrigin = "anonymous";
-          s.src = "./assets/index-D_OHC4wL.js";
-          document.body.appendChild(s);
-        }
-
-        var opt = { credentials: "same-origin" };
-        if (initData) opt.headers = { "X-Init-Data": initData };
-
-        fetch("/api/whoami", opt)
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (d && d.auth === true) boot(!initData);
-            else location.replace("/api/login");
-          })
-          .catch(function () { location.replace("/api/login"); });
-      })();
-    </script>
-    <link rel="stylesheet" crossorigin href="./assets/index-pTnbCuJi.css" />
+    <script type="module" crossorigin src="./assets/index-B8al3TT-.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-pTnbCuJi.css">
   </head>
   <body>
     <div id="root"></div>
