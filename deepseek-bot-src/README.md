@@ -55,6 +55,16 @@ tg_user.py               ACCOUNTS 里的 "tg_id": None → 你的账号 TG ID
 - **消息路由**: 编辑 `routes.json`, 例: `[{"accounts":["main"],"match":"下单","action":"notify"}]`(命中即通知你)
 - **看板**: miniapp 打开 `/accounts` 页——账号在线状态/指纹代理标记/待审批数/审计流水, 15s 自刷
 
+## 按钮操作(识别 + 点击 bot 的 callback 按钮)
+AI 能读出消息上的按钮布局并按下指定按钮:
+- `tg act=buttons tgt=账号:群名:消息ID` — 列出该消息所有按钮(文字+行列位置)
+- `tg act=click tgt=账号:群名:消息ID:行:列` — 点击指定按钮(写入类, 过审批队列)
+- `tg act=messages ... raw` — 读消息时拿按钮原始结构(reply_markup)
+
+**示例**: 你说「去把 XX bot 的每日签到点了」→ AI 先 `buttons` 读布局 → 看到「每日签到」在 1 行 1 列 → 提交审批 → 你点「✅ 批准」→ AI 执行 `click` → 把结果发你。
+
+反向也成立: AI 通过 `ask`/`notify` 发按钮问你, 你点选项, 它拿到结果继续干活(审批队列就是这么实现的)。
+
 ## 定制点
 | 要改什么 | 改哪里 |
 |---|---|
