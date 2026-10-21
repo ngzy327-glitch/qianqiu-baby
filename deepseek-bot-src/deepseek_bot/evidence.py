@@ -379,6 +379,18 @@ def traffic_view(tr_id: str, part: str = "response", offset: int = 0, limit: int
 
 def _send(method: str, url: str, headers=None, body: str = "", timeout: int = 10):
     """最小 HTTP 客户端(不校验证书), 用于流量重放"""
+    # 目标白名单闸门: 重放同样受控(历史流量指向的 host 若已移出名单则拒绝)
+    try:
+        try:
+            from . import target_guard as _tg
+        except ImportError:
+            import target_guard as _tg
+        _deny = _tg.deny(url)
+        if _deny:
+            return 0, {}, "", 0.0, _deny
+    except Exception:
+        pass
+
     data = body.encode("utf-8", "ignore") if body else None
     req = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=(method or "GET"))
     ctx = ssl.create_default_context()

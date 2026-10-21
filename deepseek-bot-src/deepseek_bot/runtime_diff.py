@@ -78,6 +78,18 @@ def _http_request(url: str, timeout: int = 10, method: str = "GET",
                   data: Optional[bytes] = None,
                   headers: Optional[Dict] = None) -> Optional[Dict]:
     """发起 HTTP 请求"""
+    # 目标白名单闸门: 名单外不发包
+    try:
+        try:
+            from . import target_guard as _tg
+        except ImportError:
+            import target_guard as _tg
+        _deny = _tg.deny(url)
+        if _deny:
+            return {"url": url, "error": _deny}
+    except Exception:
+        pass
+
     default_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

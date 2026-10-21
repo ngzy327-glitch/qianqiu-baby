@@ -102,6 +102,18 @@ def _make_ssl_context() -> ssl.SSLContext:
 def _http_request(url: str, timeout: int = 8, method: str = "GET",
                   headers: Optional[Dict] = None) -> Optional[Dict]:
     """发起 HTTP 请求并返回响应信息"""
+    # 目标白名单闸门: 名单外不发包
+    try:
+        try:
+            from . import target_guard as _tg
+        except ImportError:
+            import target_guard as _tg
+        _deny = _tg.deny(url)
+        if _deny:
+            return {"url": url, "error": _deny}
+    except Exception:
+        pass
+
     if not url.startswith("http"):
         url = "http://" + url
 
