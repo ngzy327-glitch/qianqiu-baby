@@ -331,14 +331,22 @@ def _switches(uid):
             return bool((getattr(B, d, {}) or {}).get(k, dv))
         except Exception:
             return dv
+    def _h(k, dv):
+        # _human_switch 是 {uid: {"bubble":.., "react":.., "delay":..}}, 必须取 uid 那一层的 dict;
+        # 原来用 _g(...).get(...) 是对 bool 调 .get() → AttributeError, 整个 /api/state 500。
+        try:
+            _d = (getattr(B, "_human_switch", {}) or {}).get(uid)
+            return bool(_d.get(k, dv)) if isinstance(_d, dict) else dv
+        except Exception:
+            return dv
     return {
         "talk": _g("_talk_switch", uid, True),
         "typewriter": _g("_typewriter_switch", uid, True),
         "live": _g("_live_switch", uid, False),
         "rich": _g("_rich_switch", uid, bool(getattr(B, "_RICH_ON", True))),
-        "bubble": _g("_human_switch", uid, {}).get("bubble", False) if isinstance(getattr(B, "_human_switch", {}).get(uid), dict) else False,
-        "react": _g("_human_switch", uid, {}).get("react", True) if isinstance(getattr(B, "_human_switch", {}).get(uid), dict) else True,
-        "delay": _g("_human_switch", uid, {}).get("delay", False) if isinstance(getattr(B, "_human_switch", {}).get(uid), dict) else False,
+        "bubble": _h("bubble", False),
+        "react": _h("react", True),
+        "delay": _h("delay", False),
         "emoji": (uid not in (getattr(B, "_EMOJI_OFF", set()) or set())),
         "tools_show": _g("_group_tools", uid, False),
     }
