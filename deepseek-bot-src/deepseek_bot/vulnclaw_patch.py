@@ -81,6 +81,32 @@ TOOL_DEFS = [
         },
     }},
     {"type": "function", "function": {
+        "name": "evidence",
+        "description": "证据层(证据记忆+流量存储+反幻觉闸门)。下结论/报flag/写报告前必须先用 act=verify 校验 claim 是否逐字出现在真实证据里, verified=false 的结论不得写入报告。act:list列证据/add存证据/search检索/view按id回查原文/stats统计/traffic_list列流量/traffic_view看原始报文(request|response|full)/traffic_repeat重放请求/traffic_sitemap按host聚合访问路径/verify反幻觉校验。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "act": {"type": "string", "enum": [
+                    "list", "add", "search", "view", "stats",
+                    "traffic_list", "traffic_view", "traffic_repeat", "traffic_sitemap", "verify"]},
+                "content": {"type": "string", "description": "act=add 时的证据原文"},
+                "kind": {"type": "string", "description": "证据类型: note/scan/response/poc/flag"},
+                "source": {"type": "string", "description": "证据来源(工具名/URL)"},
+                "tags": {"type": "string", "description": "逗号分隔标签"},
+                "scope": {"type": "string", "description": "作用域, 默认 default"},
+                "query": {"type": "string", "description": "act=search 检索串"},
+                "id": {"type": "string", "description": "证据/流量 id"},
+                "offset": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "claim": {"type": "string", "description": "act=verify 待校验的 flag/结论串"},
+                "part": {"type": "string", "enum": ["request", "response", "full"]},
+                "host": {"type": "string", "description": "act=traffic_list 过滤主机"},
+                "status": {"type": "integer", "description": "act=traffic_list 过滤状态码"},
+            },
+            "required": ["act"],
+        },
+    }},
+    {"type": "function", "function": {
         "name": "rundiff",
         "description": "运行时差分探测:sqli SQL注入差分检测(布尔/报错/时间盲注)/xss反射XSS检测/lfi本地文件包含检测/waf WAF行为拦截检测/response两URL响应差异分析/hpp参数污染测试/list列功能。url需含?或参数,param为测试参数名。",
         "parameters": {
@@ -104,6 +130,7 @@ HK_EXTRA = {
     "pocgen": ("poc", "生成poc", "漏洞报告", "生成报告", "渗透报告", "poc脚本", "报告生成"),
     "httpprobe": ("http探测", "批量探测", "资产探活", "目录扫描", "敏感文件", "指纹识别", "批量url", "存活探测", "响应头"),
     "rundiff": ("差分", "注入检测", "盲注", "waf检测", "参数污染", "xss检测", "sql注入检测", "运行时差分"),
+    "evidence": ("证据", "证据链", "流量记录", "重放", "原始报文", "反幻觉", "flag校验", "核实", "sitemap"),
 }
 
 
@@ -112,12 +139,13 @@ def _mods():
     global _MODS
     if _MODS is None:
         try:
-            from . import codec, codescan, report_gen, http_probe, runtime_diff
+            from . import codec, codescan, report_gen, http_probe, runtime_diff, evidence
         except ImportError:
-            import codec, codescan, report_gen, http_probe, runtime_diff
+            import codec, codescan, report_gen, http_probe, runtime_diff, evidence
         _MODS = {
             "codec": codec, "codescan": codescan, "report_gen": report_gen,
             "http_probe": http_probe, "runtime_diff": runtime_diff,
+            "evidence": evidence,
         }
     return _MODS
 
@@ -248,6 +276,35 @@ def _handle(n, a):
             return _out(hp.audit_headers(a.get("url", "")))
         return f"httpprobe: unknown act={act}"
 
+    if n == "evidence":
+        ev = m["evidence"]
+        act = a.get("act", "list")
+        scope = a.get("scope", "") or ""
+        if act == "list":
+            return _out(ev.ev_list(scope, a.get("kind", ""), a.get("limit", 30)))
+        if act == "add":
+            _tags = [t.strip() for t in str(a.get("tags", "") or "").split(",") if t.strip()]
+            return _out(ev.ev_add(a.get("content", ""), a.get("kind", "note"),
+                                  a.get("source", ""), _tags, scope or "default"))
+        if act == "search":
+            return _out(ev.ev_search(a.get("query", ""), scope, a.get("limit", 10)))
+        if act == "view":
+            return _out(ev.ev_view(a.get("id", ""), a.get("offset", 0), a.get("limit", 4000)))
+        if act == "stats":
+            return _out(ev.ev_stats())
+        if act == "traffic_list":
+            return _out(ev.traffic_list(scope, a.get("host", ""), a.get("status", 0), a.get("limit", 50)))
+        if act == "traffic_view":
+            return _out(ev.traffic_view(a.get("id", ""), a.get("part", "response"),
+                                        a.get("offset", 0), a.get("limit", 6000)))
+        if act == "traffic_repeat":
+            return _out(ev.traffic_repeat(a.get("id", ""), scope or "default"))
+        if act == "traffic_sitemap":
+            return _out(ev.traffic_sitemap(scope, a.get("limit", 300)))
+        if act == "verify":
+            return _out(ev.verify(a.get("claim", ""), scope, a.get("limit", 5)))
+        return f"evidence: unknown act={act}"
+
     if n == "rundiff":
         rd = m["runtime_diff"]
         act = a.get("act", "list")
@@ -281,7 +338,7 @@ def install(g):
         return
     _INSTALLED = True
 
-    names = {"codec", "codescan", "pocgen", "httpprobe", "rundiff"}
+    names = {"codec", "codescan", "pocgen", "httpprobe", "rundiff", "evidence"}
 
     # 1) 工具定义
     tools = g.get("TOOLS")

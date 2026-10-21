@@ -140,6 +140,17 @@ def _http_request(url: str, timeout: int = 8, method: str = "GET",
     if cl_header and cl_header.isdigit():
         content_length = int(cl_header)
 
+    # 流量证据: 每个请求/响应自动落盘(失败静默, 不影响探测)
+    try:
+        try:
+            from . import evidence as _ev
+        except ImportError:
+            import evidence as _ev
+        _ev.record_traffic(method, url, default_headers, "", status,
+                           resp_headers, body, source="httpprobe")
+    except Exception:
+        pass
+
     return {
         "url": url,
         "status": status,
