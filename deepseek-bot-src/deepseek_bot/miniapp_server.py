@@ -234,6 +234,16 @@ async def login_submit(request: Request):
     return _resp
 
 
+@app.get("/api/whoami")
+async def whoami(request: Request):
+    """轻量鉴权探针: 只回答"这次请求能不能进控制台", 给 index.html 决定加载还是跳登录页"""
+    try:
+        _a = await _require_admin(request)
+        return {"ok": True, "auth": True, "uid": _a["uid"], "via": _a.get("via") or "tg"}
+    except HTTPException:
+        return {"ok": True, "auth": False}
+
+
 @app.post("/api/logout")
 async def logout():
     _resp = JSONResponse({"ok": True})
