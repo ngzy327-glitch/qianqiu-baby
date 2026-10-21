@@ -2602,6 +2602,82 @@ try:
 except Exception as _e:
     print(f"[topic] 核对线程启动失败: {_e}", flush=True)
 
+# ==================== 自定义会员表情识别(2026-10-22) ====================
+# 链路: custom_emoji_id → Bot API getCustomEmojiStickers 下载 sticker → 视觉模型描述 → 缓存
+_EMOJI_CACHE_F = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "emoji_cache.json")
+
+
+def _emoji_cache_load():
+    try:
+        return json.loads(open(_EMOJI_CACHE_F, encoding="utf-8").read())
+    except Exception:
+        return {}
+
+
+def _emoji_cache_save(c):
+    try:
+        open(_EMOJI_CACHE_F, "w", encoding="utf-8").write(json.dumps(c, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _vision_describe_emoji(img):
+    """视觉模型描述表情包内容: Qwen 主 → ds_vision 备"""
+    try:
+        import qwen_ocr
+        if getattr(qwen_ocr, "QWEN_API_KEY", ""):
+            return qwen_ocr.describe_image(
+                img, "这是 Telegram 自定义表情包的图片。用一句中文简明描述画面内容(角色/动作/表情/文字)。", timeout=20) or ""
+    except Exception:
+        pass
+    try:
+        return ds_vision_desc(img, "这是 Telegram 自定义表情包的图片。用一句中文简明描述画面内容(角色/动作/表情/文字)。") or ""
+    except Exception:
+        return ""
+
+
+def emoji_describe(emoji_ids):
+    """识别自定义会员表情, 返回每个 id 的描述。同步; 带缓存(同一表情只识别一次)。"""
+    ids = [x.strip() for x in str(emoji_ids).replace(",", " ").split() if x.strip()][:8]
+    if not ids:
+        return "需要 emoji id"
+    cache = _emoji_cache_load()
+    out, todo = [], []
+    for eid in ids:
+        if eid in cache:
+            out.append(f"[{eid}] {cache[eid]['desc']}")
+        else:
+            todo.append(eid)
+    if todo:
+        try:
+            with httpx.Client(timeout=20) as hc:
+                r = hc.post(f"{BOT_API}/getCustomEmojiStickers", json={"custom_emoji_ids": todo})
+                for st in (r.json().get("result") or []):
+                    eid = str(st.get("custom_emoji_id", ""))
+                    std = st.get("emoji", "")          # 关联的标准 emoji(多数会员表情的语义提示)
+                    is_anim = bool(st.get("is_animated")); is_video = bool(st.get("is_video"))
+                    desc = ""
+                    if not is_anim and not is_video:
+                        try:
+                            fr = hc.post(f"{BOT_API}/getFile", json={"file_id": st.get("file_id", "")})
+                            fp = (fr.json().get("result") or {}).get("file_path", "")
+                            if fp:
+                                raw = hc.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{fp}").content
+                                import io as _io2
+                                from PIL import Image as _PIM
+                                desc = _vision_describe_emoji(_PIM.open(_io2.BytesIO(raw)).convert("RGB"))
+                        except Exception:
+                            pass
+                    kind = "动态" if is_anim else ("视频" if is_video else "静态")
+                    final = f"{std + ' ' if std else ''}{desc or '(该格式暂不支持视觉识别, 仅知关联标准表情)'} [{kind}表情]"
+                    cache[eid] = {"desc": final, "ts": time.time()}
+                    out.append(f"[{eid}] {final}")
+            _emoji_cache_save(cache)
+        except Exception as e:
+            out.append(f"识别失败: {type(e).__name__}: {e}")
+    return "\n".join(out)
+
+
 def ocr_image(fp):
     """OCR识别图片文字 - QwenVL(主) + PaddleOCR(备) + Tesseract(兜底) (v6)"""
     import numpy as np
@@ -3470,7 +3546,7 @@ TOOLS = [
  {"type":"function","function":{"name":"ralph","description":"全新上下文迭代(ralph): 每轮都开一个**没有任何对话历史的**子代理, 只把'目标+前面各轮的结论链'交给它 —— 上下文永远干净, 不会越跑越钻牛角尖; 进展靠状态文件累积。适合: 反复试错型的长任务(调参/爆破式排查/逐步逼近)、上下文已经被污染需要'重开一局'的活。objective=目标(每轮原样交给新代理, 不可变); rounds=最多几轮(默认40, 管理员≤150/普通用户≤3)。子代理会被要求用 RALPH_STATE: COMPLETE|BLOCKED|CONTINUE + RALPH_NOTE: 一句话 结尾; 遇到 COMPLETE/BLOCKED 会提前收敛。注意: 每轮都看不到上一轮的过程, 所以**结论必须写进 RALPH_NOTE**","parameters":{"type":"object","properties":{"objective":{"type":"string"},"rounds":{"type":"integer"},"role":{"type":"string"}},"required":["objective"]}}},
  {"type":"function","function":{"name":"goal","description":"持久目标: 把一件要跨多轮才能完成的活钉在会话上, 没做完会自动一轮轮接着干(不用用户催)。act=set(task=目标, max=最多几轮默认40; 管理员≤300/普通用户≤5)/status/done/block(note=卡在哪)/pause/resume/drop/note(note=本轮备注)。规则: 每轮收尾若目标仍active→自动续跑(轮次+1); 到max自动停并通知用户; 用户说「停/算了」自动暂停; 达成后**必须**调用 act=done(否则会被继续续跑)。一次就能答完的活别用","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["set","status","done","block","pause","resume","drop","note"]},"task":{"type":"string"},"max":{"type":"integer"},"note":{"type":"string"}},"required":["act"]}}},
  
- {"type":"function","function":{"name":"img","description":"Image OCR","parameters":{"type":"object","properties":{"act":{"type":"string"},"path":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"img","description":"图像识别: act=ocr 读图片文字(path=图片路径) / act=emoji 识别自定义会员表情(id=custom_emoji_id, 逗号分隔多个; 消息里的会员表情在实体中只显示 emoji-id, 想弄懂表情内容就用它)","parameters":{"type":"object","properties":{"act":{"type":"string"},"path":{"type":"string"},"id":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"shot","description":"Screenshot URL","parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}}},
  {"type":"function","function":{"name":"pdf","description":"Create/read PDF","parameters":{"type":"object","properties":{"act":{"type":"string"},"path":{"type":"string"},"text":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"group","description":"Group群组管理:extract提取成员/kick踢人/cleanup全群批量清(仅管理员, dry_run=True全群扫描统计无头像与无用户名与广告特征人数不踢, dry_run=False执行踢, mode=both默认无头像或无用户名/no_photo只踢无头像/no_username只踢无用户名(含NFT判定)/ad只踢广告特征(名字含礼物代开回收会员telegram星星等)/all全部合并, limit=最多踢N个)/pin置顶/unpin取消置顶/rename改名/desc改简介/poll投票/delmsg删消息/myperm查权限/members2成员数/members/find按名字反查成员uid(name=昵称或用户名片段,返回uid|名字|@用户名)/photo设群头像(path=图片路径)/delphoto删头像/perm群权限/mute禁言(uid+seconds)/unmute解禁/promote提升管理员(uid+custom头衔)/demote取消管理/invite邀请链接(expire秒+limit次数)/revokeinvite撤销邀请/info群详情(含community字段)/member成员详情(uid)(仅管理员,info/member/members2/photo/delphoto/perm/mute/unmute/promote/demote/invite/revokeinvite部分需bot有管理员权限)。gid可省略=自动用当前群(用户在哪个群调用就操作哪个群);换群操作才传gid; 要【删/禁言某人】先用 find 拿uid再操作","parameters":{"type":"object","properties":{"act":{"type":"string"},"uid":{"type":"integer"},"gid":{"type":"integer"},"mid":{"type":"integer"},"title":{"type":"string"},"text":{"type":"string"},"question":{"type":"string"},"options":{"type":"string"},"is_anon":{"type":"boolean"},"dry_run":{"type":"boolean"},"mode":{"type":"string"},"limit":{"type":"integer"}},"required":["act"]}}},
@@ -8495,7 +8571,8 @@ def rt(n,a,chat_id=None,uid=None):
         if n=="img":
             act=a.get("act","");path=a.get("path","")
             if act=="ocr": return ocr_image(path) or "OCR fail"
-            return "img: ocr"
+            if act=="emoji": return emoji_describe(a.get("id","") or a.get("ids",""))
+            return "img: ocr | emoji(识别自定义会员表情, id=custom_emoji_id 逗号分隔多个)"
         if n=="shot":
             url=a.get("url","");fp=f"/tmp/shot_{int(time.time())}.png"
             p=subprocess.run(f"cd /opt/deepseek-bot && .venv/bin/python3 -c \"from playwright.sync_api import sync_playwright;p=sync_playwright().start();b=p.chromium.launch();pg=b.new_page();pg.goto('{url}',timeout=15000);pg.screenshot(path='{fp}');b.close();p.stop();print('OK')\" 2>&1",shell=True,capture_output=True,text=True,timeout=600,env=_proxy_env() or os.environ)
