@@ -3480,7 +3480,7 @@ TOOLS = [
  {"type":"function","function":{"name":"group_memory","description":"群聊记忆:stats查看群聊统计(当前群)/profile查看某人群友画像(uid参数).群消息自动收录.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["stats","profile"]},"uid":{"type":"integer"}},"required":["act"]}}},
  {"type":"function","function":{"name":"conversation_search","description":"搜索历史对话:search用户对话/search_all全局搜索/topics最近话题","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["search","search_all","topics"]},"query":{"type":"string"},"uid":{"type":"integer"},"limit":{"type":"integer"}},"required":["act","query"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg多账号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
- {"type":"function","function":{"name":"tg","description":"TG多账号控制(账号配置在 accounts.json, tg act=accounts 列出全部): dialogs会话列表/unread未读摘要/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual多号连发/user查用户/group_info查群/react点赞+回复/msg按ID读单条。tgt格式「账号:参数」(如「acct1:群名」读群消息; 不带账号前缀默认第一个账号)。【护栏】send/react/click/join/webapp 是写入类操作: 执行前先向主人确认内容再调用; 每账号每分钟写操作上限10次, 全部操作有审计日志。","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
+ {"type":"function","function":{"name":"tg","description":"TG多账号控制(账号配置在 accounts.json): accounts列账号 / login登录(发码)+logincode收码 / unread未读摘要 / digest多账号日报(AI汇总) / dialogs会话列表 / messages读消息 / send发消息 / search搜索 / stats统计 / whois排行 / members成员 / join加群 / dual多号连发 / user查用户 / group_info查群 / react点赞 / msg读单条。tgt格式「账号:参数」(不带账号默认第一个号)。【护栏】send/react/click/join/webapp 是写入类: 先向主人确认再调用; 每账号每分钟写上限10次+审计日志。自动回复/消息路由规则: 编辑 autoreply.json / routes.json(daemon 监听新消息自动执行)。","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"},"confirm":{"type":"boolean","description":"主人已在对话里明确同意该写入操作时传 true 跳过审批"}},"required":["act","tgt"]}}},
  {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}}},"required":["to","text"]}}},
  {"type":"function","function":{"name":"agent_reach","description":"AI全网情报(Agent-Reach 0.1.0):读RSS源/YouTube字幕/查渠道状态. 用法: agent_reach cmd, 如 'list'列渠道 / 'get rss.feed https://xxx/feed/ --limit 3' 读RSS / 'get youtube.transcript https://youtu.be/XXX --max-tokens 4000' 读字幕 / 'doctor' 检查渠道状态","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}},
  {"type":"function","function":{"name":"project","description":"项目管理:create/list/switch/delete/stats","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["create","list","switch","delete","stats","active"]},"name":{"type":"string"},"target":{"type":"string"},"id":{"type":"integer"}},"required":["act"]}}},
@@ -9417,7 +9417,7 @@ def rt(n,a,chat_id=None,uid=None):
                         return _ks or ["acct1"]
                     except Exception:
                         return ["acct1"]
-                dual_acts = {"dialogs","messages","send","search","stats","whois","members","join","dual","react","click","buttons","webapp","user","msg","groupinfo","group_info","accounts","unread"}
+                dual_acts = {"dialogs","messages","send","search","stats","whois","members","join","dual","react","click","buttons","webapp","user","msg","groupinfo","group_info","accounts","unread","login","logincode","loginpass","digest"}
                 # act 别名归一: group_info→groupinfo(转发给 tg_user)
                 if act == "group_info":
                     act = "groupinfo"
@@ -9455,11 +9455,43 @@ def rt(n,a,chat_id=None,uid=None):
                             return f"Bot操作: {r.stdout.strip() or r.stderr.strip()}"
                     if account == "accounts" or act == "accounts":
                         return _tg_call("acct1", "accounts", [], 15)
+                    if act == "digest":
+                        # 多账号未读摘要(日报): 逐账号拉 unread, 有@的再拉最近几条消息要点, 返回给 AI 汇总
+                        _dg = []
+                        for _acc in _tg_accts():
+                            _u = _tg_call(_acc, "unread", [], 30)
+                            if _u and "没有未读" not in _u:
+                                _dg.append(f"【{_acc}】\n{_u}")
+                        if not _dg:
+                            return "✅ 所有账号都没有未读消息"
+                        return "📬 各账号未读原始数据如下, 请汇总成人话日报(重点标出@主人的和像急事的):\n\n" + "\n\n".join(_dg)
                     if account not in _tg_accts():
                         # 2026-09-08 容错: 模型常把「群名/群ID:参数」整体传进 tgt(漏了账号前缀)
                         # → 回退默认第一个账号, 整段作为参数, 不再报"账号不存在"让模型反复绕路
                         account = _tg_accts()[0]
                         rest = tgt
+
+                    # === 审批队列(2026-10-22): 写入类操作未确认 → 入队+推按钮给主人, 批准才执行 ===
+                    _TG_WRITE = {"send", "react", "click", "join", "webapp", "dual"}
+                    if act in _TG_WRITE and not a.get("confirm"):
+                        import hashlib as _hl8
+                        _aid = _hl8.md5(f"{account}{act}{tgt}{time.time()}".encode()).hexdigest()[:8]
+                        globals().setdefault("_TG_APPROVAL", {})[_aid] = {
+                            "account": account, "act": act, "rest": rest, "uid": _ruid, "ts": time.time()}
+                        try:
+                            _bg_http("sendMessage", {
+                                "chat_id": _ruid, "parse_mode": "HTML",
+                                "text": (f"{_px('✋')} <b>账号操作待审批</b> <code>#{_aid}</code>\n\n"
+                                         f"账号: <code>{_hesc(account)}</code>\n"
+                                         f"操作: <code>{_hesc(act)}</code>\n"
+                                         f"内容: {_hesc(rest[:200])}"),
+                                "reply_markup": {"inline_keyboard": [[
+                                    {"text": "✅ 批准执行", "callback_data": f"appr:{_aid}"},
+                                    {"text": "❌ 驳回", "callback_data": f"aprej:{_aid}"}]]}})
+                        except Exception as _ape:
+                            print(f"[approval] 推送失败: {_ape}", flush=True)
+                        return (f"⏳ 这是写入类操作, 已提交审批 #{_aid} 并给主人推了确认按钮; "
+                                f"批准后自动执行, 驳回即取消。(主人若已在对话里明确说过同意, 就带 confirm=true 重调本工具跳过审批)")
 
                     if act == "dual":
                         # tgt = "acct1:群名:消息||acct2:群名:消息"
@@ -10589,6 +10621,32 @@ async def main():
     async def confirm_cb(cb):
         data = cb.data
         if data in (b"stop",): return  # stop 已单独处理
+        if data.startswith(b"appr:") or data.startswith(b"aprej:"):
+            # 审批队列(2026-10-22): tg 写入类操作的批准/驳回
+            try:
+                if cb.sender_id not in OK:
+                    await cb.answer("❌ 仅管理员可审批", alert=True); return
+                _aid = data.split(b":", 1)[1].decode()
+                _it = globals().get("_TG_APPROVAL", {}).pop(_aid, None)
+                if not _it:
+                    await cb.answer("该审批已过期/已处理", alert=True); return
+                if data.startswith(b"aprej:"):
+                    await cb.answer("已驳回")
+                    try: await cb.edit(f"❌ 已驳回 <code>#{_aid}</code>: {_hesc(_it['act'])} → {_hesc(_it['rest'][:80])}", parse_mode="HTML", buttons=None)
+                    except Exception: pass
+                    return
+                await cb.answer("✅ 批准, 执行中…")
+                _rest2 = _it["rest"].split(":")
+                if _it["act"] in ("send", "search") and len(_rest2) > 2:
+                    _rest2 = _rest2[:1] + [":".join(_rest2[1:])]
+                _out2 = _tg_call(_it["account"], _it["act"], _rest2, 60)
+                try: await cb.edit(f"✅ 已执行 <code>#{_aid}</code>\n{_hesc(str(_out2)[:400])}", parse_mode="HTML", buttons=None)
+                except Exception: pass
+            except Exception as _ape2:
+                print(f"[cb] approval err: {_ape2}", flush=True)
+                try: await cb.answer("审批处理异常", alert=True)
+                except Exception: pass
+            return
         if data == b"gmclear":
             # 🧹 清空本群聊天记忆(2026-09-04): 只清会话记录/摘要, 群友画像(兴趣/事实/解读)全部保留; 仅管理员可操作
             try:

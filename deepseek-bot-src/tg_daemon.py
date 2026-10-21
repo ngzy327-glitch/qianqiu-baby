@@ -125,6 +125,12 @@ def _parse_args(act, args):
         return {}
     if act == "unread":
         return {"limit": n(0, 50)}
+    if act == "login":
+        return {}
+    if act == "logincode":
+        return {"code": s(0, "")}
+    if act == "loginpass":
+        return {"password": s(0, "")}
     return None
 
 
@@ -160,6 +166,161 @@ def _audit(account, act, args, ok, note=""):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+# ==================== 登录引导(2026-10-22) ====================
+_PENDING_LOGINS = {}   # account -> (client, phone_code_hash)
+
+
+async def _handle_login(act, account, args):
+    """tg act=login → 发码; act=logincode tgt=账号:验证码 → 完成; 开了两步验证再 act=loginpass"""
+    if account not in tg_user.ACCOUNTS:
+        return "未知账号 '%s'，可用: %s" % (account, " / ".join(tg_user.ACCOUNTS.keys()))
+    cfg = tg_user.ACCOUNTS[account]
+    if act == "login":
+        try:
+            _old = _PENDING_LOGINS.pop(account, None)
+            if _old:
+                try: await _old[0].disconnect()
+                except Exception: pass
+            client, ph = await tg_user.login_start(account)
+            _PENDING_LOGINS[account] = (client, ph)
+            _audit(account, "login", [], True, "code_sent")
+            return ("📨 验证码已发到 %s 的 Telegram 客户端。\n"
+                    "请回复: tg act=logincode tgt=%s:验证码" % (cfg.get("phone", "?"), account))
+        except Exception as e:
+            _audit(account, "login", [], False, str(e)[:80])
+            return "ERROR: 登录发起失败: %s" % e
+    pend = _PENDING_LOGINS.get(account)
+    if not pend:
+        return "ERROR: 没有进行中的登录会话, 请先 tg act=login"
+    client, ph = pend
+    if act == "logincode":
+        code = str(args[0] if args else "").strip().replace(" ", "").replace("-", "")
+        r = await tg_user.login_finish(client, cfg, code, ph)
+        if r == "need_password":
+            return "🔐 该账号开了两步验证, 请回复: tg act=loginpass tgt=%s:密码" % account
+        if r == "ok":
+            _PENDING_LOGINS.pop(account, None)
+            CLIENTS.pop(account, None)   # 下次操作重连正式 session
+            _audit(account, "login", [], True, "done")
+            return "✅ 登录成功! session 已保存, 账号 %s 现在可以用了" % account
+        return "ERROR: 登录失败"
+    if act == "loginpass":
+        password = str(args[0] if args else "")
+        r = await tg_user.login_finish(client, cfg, "", ph, password=password)
+        if r == "ok":
+            _PENDING_LOGINS.pop(account, None)
+            CLIENTS.pop(account, None)
+            _audit(account, "login", [], True, "done_2fa")
+            return "✅ 登录成功(两步验证通过)! 账号 %s 现在可以用了" % account
+        return "ERROR: 密码错误或登录失败"
+    return "未知登录操作"
+
+
+# ==================== 规则引擎: 自动回复 + 消息路由(2026-10-22) ====================
+# autoreply.json: [{"enabled":true,"accounts":["ops"],"match":"在吗","reply":"在的, 请问什么事~","scope":"private|group|all"}]
+# routes.json:    [{"enabled":true,"accounts":["main"],"match":"下单","action":"notify|forward","target":"<账号>:<群>"}]
+_RULES_F = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "autoreply.json")
+_ROUTES_F = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "routes.json")
+_LISTENED = set()
+
+
+def _load_json(p, default):
+    try:
+        if os.path.exists(p):
+            return json.loads(open(p, encoding="utf-8").read()) or default
+    except Exception:
+        pass
+    return default
+
+
+async def _rules_notify(text):
+    """路由命中时通知主人(bot API 直发, 不经 AI)"""
+    token = os.getenv("DEEPSEEK_BOT_TOKEN", "")
+    owner = os.getenv("OWNER_ID", "")
+    if not token or not owner:
+        return
+    try:
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=8) as hc:
+            await hc.post("https://api.telegram.org/bot%s/sendMessage" % token,
+                          json={"chat_id": int(owner), "text": text[:3900]})
+    except Exception:
+        pass
+
+
+async def _apply_rules(account, client, cfg, event):
+    """新消息规则匹配: 自动回复 + 路由转发"""
+    text = (getattr(event.message, "message", "") or "")
+    if not text:
+        return
+    low = text.lower()
+    # ---- 自动回复 ----
+    for r in _load_json(_RULES_F, []):
+        try:
+            if not r.get("enabled", True):
+                continue
+            accts = r.get("accounts")
+            if accts and account not in accts:
+                continue
+            kw = str(r.get("match", "")).lower()
+            if not kw or kw not in low:
+                continue
+            scope = str(r.get("scope", "private"))
+            if scope == "private" and not event.is_private:
+                continue
+            if scope == "group" and event.is_private:
+                continue
+            if not _rate_ok(account):       # 自动回复也算写操作, 过限流
+                _audit(account, "autoreply", [kw], False, "rate_limited")
+                continue
+            await event.reply(str(r.get("reply", "收到")))
+            _audit(account, "autoreply", [kw], True, "sent")
+            _log("自动回复命中 [%s] kw=%s" % (account, kw))
+        except Exception as ex:
+            _log("autoreply 执行异常: %s" % ex)
+    # ---- 消息路由 ----
+    for r in _load_json(_ROUTES_F, []):
+        try:
+            if not r.get("enabled", True):
+                continue
+            accts = r.get("accounts")
+            if accts and account not in accts:
+                continue
+            kw = str(r.get("match", "")).lower()
+            if not kw or kw not in low:
+                continue
+            action = str(r.get("action", "notify"))
+            if action == "notify":
+                await _rules_notify("📡 路由命中 [%s] 关键词「%s」\n来自: %s\n内容: %s"
+                                    % (account, kw, getattr(event.chat, "title", None) or "私聊", text[:500]))
+            elif action == "forward":
+                tgt = str(r.get("target", ""))
+                if ":" in tgt and _rate_ok(account):
+                    t_acc, t_grp = tgt.split(":", 1)
+                    await tg_user.cmd_send(client, cfg, t_grp, "【路由转发】\n" + text[:1500])
+                    _audit(account, "route_fwd", [kw, tgt], True, "")
+        except Exception as ex:
+            _log("route 执行异常: %s" % ex)
+
+
+async def _ensure_listener(account, client, cfg):
+    """每个账号挂一次新消息监听(自动回复/路由规则生效的前提)"""
+    if account in _LISTENED:
+        return
+    _LISTENED.add(account)
+    try:
+        from telethon import events as _ev
+        @client.on(_ev.NewMessage(incoming=True))
+        async def _on_msg(e, _acc=account, _cli=client, _cfg=cfg):
+            try:
+                await _apply_rules(_acc, _cli, _cfg, e)
+            except Exception as _ex:
+                _log("规则引擎异常 [%s]: %s" % (_acc, _ex))
+        _log("规则监听器已挂载 [%s]" % account)
+    except Exception as ex:
+        _log("监听器挂载失败 [%s]: %s" % (account, ex))
 
 
 async def _run_cmd(client, cfg, act, args):
@@ -208,6 +369,7 @@ async def _get_client(account):
     c.flood_sleep_threshold = 15
     CLIENTS[account] = (c, cfg)
     _log("已连接账号 %s" % account)
+    await _ensure_listener(account, c, cfg)   # 挂上规则监听器(自动回复/路由)
     return c, cfg
 
 
@@ -215,6 +377,8 @@ async def handle(req):
     account = str(req.get("account", "acct1")).lower()
     act = str(req.get("act", "")).lower()
     args = req.get("args") or []
+    if act in ("login", "logincode", "loginpass"):
+        return await _handle_login(act, account, args)
     if act == "accounts":
         # 列账号不需要 client 连接
         try:
@@ -284,6 +448,12 @@ async def amain():
         _log("本地 socket 已监听 127.0.0.1:8791")
     except Exception as _se2:
         _log("socket 监听失败: %s" % _se2)
+    # 启动时预热: 连接所有已登录账号并挂规则监听器(自动回复/路由 24h 生效)
+    for _acc in tg_user.ACCOUNTS:
+        try:
+            await _get_client(_acc)
+        except Exception as _we:
+            _log("预热账号 %s 失败(未登录或网络问题, 用到时再连): %s" % (_acc, _we))
     loop = asyncio.get_running_loop()
     try:
         while True:

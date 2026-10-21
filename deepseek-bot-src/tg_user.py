@@ -180,6 +180,43 @@ async def get_client(account_name):
     return client, cfg
 
 
+# ==================== 登录引导(2026-10-22 两阶段: login 发码 → logincode 收码) ====================
+
+async def login_start(account_name):
+    """第一阶段: 建立临时连接并发验证码到该账号的 TG。
+    返回 (client, phone_code_hash) — 调用方(daemon)需持有它们直到 login_finish。"""
+    cfg = ACCOUNTS.get(account_name)
+    if not cfg:
+        raise ValueError(f"未知账号 '{account_name}'，可用: {' / '.join(ACCOUNTS.keys())}")
+    phone = str(cfg.get("phone") or "").strip()
+    if not phone or phone.startswith("+1000000"):
+        raise ValueError(f"账号 {account_name} 的 phone 未在 accounts.json 里配置")
+    if not API_ID or not API_HASH:
+        raise ValueError("未配置 TG_API_ID / TG_API_HASH (.env)")
+    client = TelegramClient(cfg["session"], API_ID, API_HASH)
+    await client.connect()
+    if await client.is_user_authorized():
+        await client.disconnect()
+        raise ValueError(f"账号 {account_name} 已登录, 无需重复登录")
+    sent = await client.send_code_request(phone)
+    return client, sent.phone_code_hash
+
+
+async def login_finish(client, cfg, code, phone_code_hash, password=""):
+    """第二阶段: 用收到的验证码完成登录; 若开了两步验证则再走密码。
+    返回 'ok' / 'need_password'，异常向上抛。"""
+    from telethon.errors import SessionPasswordNeededError
+    phone = cfg["phone"]
+    try:
+        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+    except SessionPasswordNeededError:
+        if not password:
+            return "need_password"
+        await client.sign_in(password=password)
+    ok = await client.is_user_authorized()
+    return "ok" if ok else "fail"
+
+
 async def cmd_dialogs(client, cfg, limit=20):
     dialogs = await client.get_dialogs(limit=limit)
     print(f"\n📒 {cfg['name']} 最近 {len(dialogs)} 个对话:")

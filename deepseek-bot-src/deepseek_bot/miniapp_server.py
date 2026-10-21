@@ -2031,6 +2031,96 @@ async def file_get(request: Request):
     return FileResponse(str(_p), filename=_name)
 
 
+# ==================== 多账号看板(2026-10-22) ====================
+def _accounts_data():
+    """账号状态 + 审计尾部 + 待审批数"""
+    import sys as _s
+    _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
+    if _base not in _s.path:
+        _s.path.insert(0, _base)
+    try:
+        import tg_user as _tu
+        _accs = []
+        for _n, _c in _tu.ACCOUNTS.items():
+            _accs.append({
+                "key": _n, "name": _c.get("name", "?"), "username": _c.get("username", ""),
+                "session_ok": os.path.exists(str(_c.get("session", ""))),
+                "has_device": bool(_c.get("device")), "has_proxy": bool(_c.get("proxy")),
+            })
+    except Exception as _e:
+        _accs = [{"key": "?", "name": f"读取失败: {_e}", "username": "", "session_ok": False}]
+    _audit = []
+    try:
+        _log_p = os.path.join(_base, "audit.log")
+        if os.path.exists(_log_p):
+            _lines = open(_log_p, encoding="utf-8").readlines()[-30:]
+            for _ln in reversed(_lines):
+                try:
+                    _audit.append(json.loads(_ln))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    _pend = 0
+    try:
+        from . import bot as _B2
+        _pend = len(getattr(_B2, "_TG_APPROVAL", {}) or globals().get("_TG_APPROVAL", {}))
+    except Exception:
+        pass
+    return {"accounts": _accs, "audit": _audit, "pending_approvals": _pend}
+
+
+@app.get("/api/accounts")
+async def api_accounts(request: Request):
+    await _require_admin(request)
+    return {"ok": True, **_accounts_data()}
+
+
+_ACC_BOARD_HTML = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账号看板</title><style>
+body{background:#0f1115;color:#e6e8ee;font-family:-apple-system,"PingFang SC",sans-serif;margin:0;padding:18px}
+h1{font-size:18px;margin:0 0 14px}h2{font-size:14px;color:#8b93a3;margin:22px 0 8px}
+.card{background:#191c23;border:1px solid #262a33;border-radius:12px;padding:14px 16px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center}
+.ok{color:#4ade80}.bad{color:#f87171}.dim{color:#8b93a3;font-size:12px}
+.tag{font-size:11px;background:#262a33;border-radius:6px;padding:2px 8px;margin-left:6px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:6px 8px;border-bottom:1px solid #262a33;text-align:left}
+th{color:#8b93a3;font-weight:normal}
+</style></head><body>
+<h1>🐳 账号看板</h1>
+<div id="acc"></div>
+<h2>审计流水(最近30条)</h2>
+<div class="card"><table id="audit"><tr><th>时间</th><th>账号</th><th>操作</th><th>结果</th><th>备注</th></tr></table></div>
+<script>
+async function load(){
+  const r = await fetch('/api/accounts'); const d = await r.json();
+  let h = '';
+  (d.accounts||[]).forEach(a=>{
+    h += `<div class="card"><div class="row"><div><b>${a.name}</b> <span class="dim">${a.username||''}</span></div>
+    <div>${a.session_ok?'<span class="ok">● 在线</span>':'<span class="bad">○ 未登录</span>'}
+    ${a.has_device?'<span class="tag">指纹</span>':''}${a.has_proxy?'<span class="tag">代理</span>':''}</div></div>
+    <div class="dim">key: ${a.key}</div></div>`;
+  });
+  if(d.pending_approvals>0) h = `<div class="card" style="border-color:#b45309">✋ 待审批操作: <b>${d.pending_approvals}</b> 条(去 TG 里点按钮处理)</div>` + h;
+  document.getElementById('acc').innerHTML = h || '<div class="card dim">无账号</div>';
+  let rows = '';
+  (d.audit||[]).forEach(x=>{
+    rows += `<tr><td class="dim">${x.ts||''}</td><td>${x.account||''}</td><td>${x.act||''}</td>
+    <td>${x.ok?'<span class="ok">✓</span>':'<span class="bad">✗</span>'}</td><td class="dim">${x.note||''}</td></tr>`;
+  });
+  document.getElementById('audit').innerHTML += rows;
+}
+load(); setInterval(load, 15000);
+</script></body></html>"""
+
+
+@app.get("/accounts")
+async def accounts_board(request: Request):
+    await _require_admin(request)
+    return HTMLResponse(_ACC_BOARD_HTML)
+
+
 # ==================== 启动 ====================
 def start(bot_module=None, port=PORT):
     """在 bot 进程里起 HTTP 服务(daemon 线程)。失败只打日志, 绝不影响 bot 本体。"""
