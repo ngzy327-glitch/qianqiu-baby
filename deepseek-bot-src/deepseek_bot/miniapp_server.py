@@ -2032,23 +2032,131 @@ async def file_get(request: Request):
 
 
 # ==================== 多账号看板(2026-10-22) ====================
-def _accounts_data():
-    """账号状态 + 审计尾部 + 待审批数"""
+_IP_CACHE = {}                       # proxy_key -> (ts, ip)
+_IP_TTL = 60                         # 秒
+_IP_ENDPOINTS = [                    # 一个挂了换下一个
+    "https://api.ipify.org",
+    "https://ifconfig.me/ip",
+    "https://checkip.amazonaws.com",
+    "https://icanhazip.com",
+]
+
+
+def _proxy_url(px):
+    """accounts.json proxy dict -> httpx 可用的代理 URL"""
+    if not isinstance(px, dict) or not px.get("host"):
+        return ""
+    scheme = px.get("type") or "socks5"
+    host = px["host"]
+    port = int(px.get("port") or 1080)
+    user = px.get("user") or ""
+    pwd = px.get("pass") or ""
+    auth = f"{user}:{pwd}@" if user else ""
+    return f"{scheme}://{auth}{host}:{port}"
+
+
+def _probe_public_ip(proxy_cfg=None):
+    """走指定代理请求公共端点, 拿到真实出口 IP; 失败返回空字符串"""
+    import time as _t
+    px_url = _proxy_url(proxy_cfg) if proxy_cfg else ""
+    key = px_url or "__direct__"
+    now = _t.time()
+    cached = _IP_CACHE.get(key)
+    if cached and now - cached[0] < _IP_TTL:
+        return cached[1]
+    try:
+        import httpx
+        kw = {"timeout": httpx.Timeout(6, connect=4)}
+        if px_url:
+            kw["proxies"] = {"https://": px_url, "http://": px_url}
+        for ep in _IP_ENDPOINTS:
+            try:
+                r = httpx.get(ep, **kw)
+                if r.status_code == 200 and r.text:
+                    ip = r.text.strip()[:64]
+                    _IP_CACHE[key] = (now, ip)
+                    return ip
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def _collect_web_sessions():
+    """问 web_session daemon 要当前存活浏览器列表"""
     import sys as _s
     _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
     if _base not in _s.path:
         _s.path.insert(0, _base)
     try:
+        from knowledge.toolPlugins.web_session import call as _ws_call
+        r = _ws_call({"act": "list"})
+        if r.get("ok"):
+            return {s["account"]: s for s in r.get("sessions") or []}
+    except Exception:
+        pass
+    return {}
+
+
+def _accounts_data():
+    """账号状态 + 审计尾部 + 待审批数 + 指纹/代理/实时出口 IP"""
+    import sys as _s
+    _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
+    if _base not in _s.path:
+        _s.path.insert(0, _base)
+    _ws_map = _collect_web_sessions()
+    try:
         import tg_user as _tu
         _accs = []
         for _n, _c in _tu.ACCOUNTS.items():
+            _px = _c.get("proxy") or {}
+            _ip = _probe_public_ip(_px)
+            _device = _c.get("device") or {}
+            _web = _c.get("web") or {}
+            _ws = _ws_map.get(_n)
             _accs.append({
-                "key": _n, "name": _c.get("name", "?"), "username": _c.get("username", ""),
+                "key": _n,
+                "name": _c.get("name", "?"),
+                "username": _c.get("username", ""),
+                "phone": _c.get("phone", ""),
                 "session_ok": os.path.exists(str(_c.get("session", ""))),
-                "has_device": bool(_c.get("device")), "has_proxy": bool(_c.get("proxy")),
+                # TG 侧指纹(Telethon)
+                "device": {
+                    "device_model": _device.get("device_model", ""),
+                    "system_version": _device.get("system_version", ""),
+                    "app_version": _device.get("app_version", ""),
+                    "lang_code": _device.get("lang_code", ""),
+                },
+                # TG 侧代理
+                "proxy": {
+                    "type": _px.get("type", ""),
+                    "host": _px.get("host", ""),
+                    "port": int(_px.get("port") or 0),
+                    "has_auth": bool(_px.get("user")),
+                    "exit_ip": _ip,
+                } if _px.get("host") else {
+                    "type": "direct", "host": "", "port": 0, "has_auth": False,
+                    "exit_ip": _ip,
+                },
+                # 网页侧指纹
+                "web": {
+                    "profile": _web.get("profile", "desktop_cn"),
+                    "profile_set": bool(_web),
+                },
+                # web_session 常驻状态
+                "web_session": {
+                    "alive": bool(_ws),
+                    "profile": (_ws or {}).get("profile", ""),
+                    "title": (_ws or {}).get("title", ""),
+                    "url": (_ws or {}).get("url", ""),
+                    "idle": (_ws or {}).get("idle", 0),
+                },
             })
     except Exception as _e:
-        _accs = [{"key": "?", "name": f"读取失败: {_e}", "username": "", "session_ok": False}]
+        _accs = [{"key": "?", "name": f"读取失败: {_e}", "username": "", "session_ok": False,
+                  "device": {}, "proxy": {"type": "direct", "host": "", "exit_ip": ""},
+                  "web": {}, "web_session": {"alive": False}}]
     _audit = []
     try:
         _log_p = os.path.join(_base, "audit.log")
@@ -2078,38 +2186,116 @@ async def api_accounts(request: Request):
 
 _ACC_BOARD_HTML = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>账号看板</title><style>
-body{background:#0f1115;color:#e6e8ee;font-family:-apple-system,"PingFang SC",sans-serif;margin:0;padding:18px}
-h1{font-size:18px;margin:0 0 14px}h2{font-size:14px;color:#8b93a3;margin:22px 0 8px}
-.card{background:#191c23;border:1px solid #262a33;border-radius:12px;padding:14px 16px;margin-bottom:10px}
-.row{display:flex;justify-content:space-between;align-items:center}
-.ok{color:#4ade80}.bad{color:#f87171}.dim{color:#8b93a3;font-size:12px}
-.tag{font-size:11px;background:#262a33;border-radius:6px;padding:2px 8px;margin-left:6px}
-table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:6px 8px;border-bottom:1px solid #262a33;text-align:left}
-th{color:#8b93a3;font-weight:normal}
+<title>账号看板 · ngzy-plus</title>
+<style>
+*{box-sizing:border-box}
+body{background:#0b0d12;color:#e6e8ee;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;margin:0;padding:20px;line-height:1.5}
+h1{font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:8px}
+h1 .dot{width:10px;height:10px;background:#4ade80;border-radius:50%;display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+h2{font-size:12px;color:#6b7280;margin:24px 0 10px;letter-spacing:.08em;text-transform:uppercase}
+.card{background:#14171f;border:1px solid #1f2330;border-radius:14px;padding:16px 18px;margin-bottom:10px}
+.card:hover{border-color:#2a3042}
+.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.head .name{font-weight:600;font-size:15px}
+.head .sub{color:#6b7280;font-size:12px;margin-left:6px}
+.st{font-size:12px;padding:3px 10px;border-radius:20px}
+.st-ok{background:#0f2a1a;color:#4ade80;border:1px solid #16422a}
+.st-bad{background:#2a1414;color:#f87171;border:1px solid #421616}
+.st-info{background:#131c2e;color:#60a5fa;border:1px solid #1e3050}
+.st-idle{background:#1c1a12;color:#fbbf24;border:1px solid #423916}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 24px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.blk-title{font-size:11px;color:#6b7280;margin-bottom:6px;letter-spacing:.06em}
+.kv{display:flex;font-size:12px;padding:2px 0}
+.kv .k{color:#6b7280;min-width:92px;flex-shrink:0}
+.kv .v{color:#e6e8ee;word-break:break-all}
+.ip{font-family:"SF Mono",Menlo,Consolas,monospace;background:#0d1220;color:#60a5fa;padding:1px 6px;border-radius:4px;font-size:12px;letter-spacing:.02em}
+.ip.loading{color:#fbbf24}
+.ip.fail{color:#f87171}
+.web-sesh{background:#0d1a10;border:1px solid #143220;border-radius:8px;padding:10px 12px;margin-top:8px}
+.web-sesh.off{background:#16191f;border-color:#1f2330}
+.tag{font-size:10px;background:#1f2330;border-radius:4px;padding:1px 6px;margin-left:4px;color:#8b93a3}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:8px 10px;border-bottom:1px solid #1f2330;text-align:left}
+th{color:#6b7280;font-weight:normal;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.dim{color:#6b7280;font-size:12px}
+.toolbar{display:flex;gap:8px;margin-bottom:14px;color:#6b7280;font-size:12px}
+.toolbar .spacer{flex:1}
+.toolbar button{background:#1f2330;color:#e6e8ee;border:1px solid #2a3042;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
+.toolbar button:hover{border-color:#60a5fa}
 </style></head><body>
-<h1>🐳 账号看板</h1>
+<h1>🐳 ngzy-plus · 账号看板</h1>
+<div class="toolbar">
+  <span id="uptime">加载中…</span>
+  <span class="spacer"></span>
+  <button onclick="location.reload()">⟳ 刷新</button>
+</div>
 <div id="acc"></div>
-<h2>审计流水(最近30条)</h2>
-<div class="card"><table id="audit"><tr><th>时间</th><th>账号</th><th>操作</th><th>结果</th><th>备注</th></tr></table></div>
+<h2>审计流水 · 最近 30 条</h2>
+<div class="card" style="padding:0;overflow-x:auto"><table id="audit">
+<tr><th>时间</th><th>账号</th><th>操作</th><th>参数</th><th>结果</th><th>备注</th></tr></table></div>
 <script>
+const fmtSec=s=>{if(!s)return"-";if(s<60)return s+"秒";if(s<3600)return Math.floor(s/60)+"分"+(s%60)+"秒";return Math.floor(s/3600)+"时"+Math.floor(s%3600/60)+"分"};
+function renderAcc(a){
+  const st_session=a.session_ok
+    ? '<span class="st st-ok">● 会话已登录</span>'
+    : '<span class="st st-bad">○ 未登录</span>';
+  const d=a.device||{};
+  const px=a.proxy||{};
+  const web=a.web||{};
+  const ws=a.web_session||{};
+  let devHtml=
+    `<div class="blk-title">TG 指纹</div>`+
+    `<div class="kv"><span class="k">device_model</span><span class="v">${d.device_model||'(默认)'}</span></div>`+
+    `<div class="kv"><span class="k">system_version</span><span class="v">${d.system_version||'(默认)'}</span></div>`+
+    `<div class="kv"><span class="k">app_version</span><span class="v">${d.app_version||'(默认)'}</span></div>`+
+    `<div class="kv"><span class="k">lang_code</span><span class="v">${d.lang_code||'(默认)'}</span></div>`;
+  const pxAuth=px.has_auth?'<span class="tag">有账号密码</span>':'';
+  let pxHtml=
+    `<div class="blk-title">代理出口</div>`+
+    `<div class="kv"><span class="k">代理</span><span class="v">`+
+    (px.host?`<code>${px.type}://${px.host}:${px.port}</code>${pxAuth}`:'<span style="color:#6b7280">直连(无代理)</span>')+`</span></div>`+
+    `<div class="kv"><span class="k">真实出口 IP</span><span class="v">`+
+    (px.exit_ip?`<span class="ip">${px.exit_ip}</span>`:`<span class="ip loading">探测中…</span>`)+`</span></div>`;
+  let webHtml=`<div class="blk-title">网页指纹</div>`+
+    `<div class="kv"><span class="k">profile</span><span class="v">${web.profile||'desktop_cn'}${web.profile_set?'':'<span class="tag">默认</span>'}</span></div>`;
+  let wsHtml='';
+  if(ws.alive){
+    wsHtml=`<div class="web-sesh">`+
+      `<div class="kv"><span class="k">浏览器</span><span class="v"><span class="st st-ok">● 常驻中</span> <span class="tag">${ws.profile||web.profile||''}</span></span></div>`+
+      `<div class="kv"><span class="k">当前页</span><span class="v">${ws.title||'(加载中)'} <span class="dim">${ws.url||''}</span></span></div>`+
+      `<div class="kv"><span class="k">空闲</span><span class="v">${fmtSec(ws.idle)}</span></div>`+
+    `</div>`;
+  }else{
+    wsHtml=`<div class="web-sesh off">`+
+      `<div class="kv"><span class="k">浏览器</span><span class="v"><span class="st st-idle">○ 未启动</span> <span class="dim">用 "open" 打开并常驻</span></span></div>`+
+    `</div>`;
+  }
+  return `<div class="card">`+
+    `<div class="head"><div><span class="name">${a.name}</span> <span class="sub">${a.username||a.phone||'#'+a.key}</span></div>${st_session}</div>`+
+    `<div class="grid">${devHtml}${pxHtml}${webHtml}</div>${wsHtml}`;
+}
 async function load(){
-  const r = await fetch('/api/accounts'); const d = await r.json();
-  let h = '';
-  (d.accounts||[]).forEach(a=>{
-    h += `<div class="card"><div class="row"><div><b>${a.name}</b> <span class="dim">${a.username||''}</span></div>
-    <div>${a.session_ok?'<span class="ok">● 在线</span>':'<span class="bad">○ 未登录</span>'}
-    ${a.has_device?'<span class="tag">指纹</span>':''}${a.has_proxy?'<span class="tag">代理</span>':''}</div></div>
-    <div class="dim">key: ${a.key}</div></div>`;
-  });
-  if(d.pending_approvals>0) h = `<div class="card" style="border-color:#b45309">✋ 待审批操作: <b>${d.pending_approvals}</b> 条(去 TG 里点按钮处理)</div>` + h;
-  document.getElementById('acc').innerHTML = h || '<div class="card dim">无账号</div>';
-  let rows = '';
+  const t0=Date.now();
+  const r=await fetch('/api/accounts');
+  const d=await r.json();
+  let h='';
+  if(d.pending_approvals>0){
+    h+=`<div class="card" style="border-color:#b45309;background:#2a2012">
+        ✋ 待审批操作: <b>${d.pending_approvals}</b> 条 &nbsp;<span class="dim">(去 TG 里点批准按钮处理)</span>
+      </div>`;
+  }
+  (d.accounts||[]).forEach(a=>h+=renderAcc(a));
+  document.getElementById('acc').innerHTML=h||'<div class="card dim">无账号</div>';
+  let rows='';
   (d.audit||[]).forEach(x=>{
-    rows += `<tr><td class="dim">${x.ts||''}</td><td>${x.account||''}</td><td>${x.act||''}</td>
-    <td>${x.ok?'<span class="ok">✓</span>':'<span class="bad">✗</span>'}</td><td class="dim">${x.note||''}</td></tr>`;
+    rows+=`<tr><td class="dim">${x.ts||''}</td><td>${x.account||''}</td><td>${x.act||''}</td>
+      <td class="dim">${(x.args||[]).join(', ')}</td>
+      <td>${x.ok?'<span class="st st-ok" style="padding:2px 8px">✓</span>':'<span class="st st-bad" style="padding:2px 8px">✗</span>'}</td>
+      <td class="dim">${x.note||''}</td></tr>`;
   });
-  document.getElementById('audit').innerHTML += rows;
+  document.getElementById('audit').innerHTML=`<tr><th>时间</th><th>账号</th><th>操作</th><th>参数</th><th>结果</th><th>备注</th></tr>`+rows;
+  document.getElementById('uptime').textContent='上次刷新 '+Math.round((Date.now()-t0)/1000)+'s ago';
 }
 load(); setInterval(load, 15000);
 </script></body></html>"""
