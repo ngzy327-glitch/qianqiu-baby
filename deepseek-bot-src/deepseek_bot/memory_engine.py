@@ -63,6 +63,54 @@ def load_memories(uid: int) -> dict:
     except:
         return {"facts": [], "summary": "", "prefs": {}, "last_summary_at": 0, "turn_count": 0, "created_at": time.time()}
 
+
+def _store_keys(uid) -> list:
+    """记忆读取要覆盖的所有文件键。
+
+    2026-10-22 修BUG「说了记住但下次不记得」: 两处写入用了不同的键 ——
+      · memory 工具(用户明确说"记住…") 写 uid 级: u{uid}.json
+      · 自动抽取事实 / 自动摘要        写会话级: u{uid}_{chatid}.json
+    而 retrieve_context 只读会话级 → 明确记住的东西永远搜不到。
+    现在读取两处合并, 写入位置保持原样(不破坏群聊/私聊分开的旧数据)。
+    """
+    s = str(uid)
+    keys = [s]
+    if ":" in s:
+        keys.append(s.split(":")[0])
+    return keys
+
+
+def load_all(uid) -> dict:
+    """会话级 + 用户级 记忆合并读取(去重: 同一条文本只保留一次)"""
+    merged = {"facts": [], "summary": "", "prefs": {}, "turn_count": 0}
+    _seen = set()
+    for k in _store_keys(uid):
+        d = load_memories(k)
+        merged["turn_count"] = max(merged["turn_count"], int(d.get("turn_count", 0) or 0))
+        if not merged["summary"] and d.get("summary"):
+            merged["summary"] = d["summary"]
+        for pk, pv in (d.get("prefs") or {}).items():
+            merged["prefs"].setdefault(pk, pv)
+        for f in d.get("facts", []):
+            t = f["text"] if isinstance(f, dict) else str(f)
+            if t in _seen:
+                continue
+            _seen.add(t)
+            merged["facts"].append(f)
+    return merged
+
+
+def clear_memories(uid) -> int:
+    """清除该用户/该会话的全部记忆文件(含 uid 级与会话级)"""
+    n = 0
+    for k in _store_keys(uid):
+        try:
+            _mem_path(k).unlink()
+            n += 1
+        except Exception:
+            pass
+    return n
+
 def save_memories(uid: int, data: dict):
     fp = _mem_path(uid)
     tmp = str(fp) + ".tmp"
@@ -284,7 +332,7 @@ def retrieve_context(uid: int, current_msg: str = "") -> str:
     v3.1: 增强错误处理，任何异常都不影响主流程。
     """
     try:
-        data = load_memories(uid)
+        data = load_all(uid)
         parts = []
         current_turn = data.get("turn_count", 0)
         
@@ -404,11 +452,11 @@ def update_summary(uid: int, summary: str):
     save_memories(uid, data)
 
 def get_memory_stats(uid: int) -> str:
-    data = load_memories(uid)
+    data = load_all(uid)
     facts = data.get("facts", [])
     cats = {}
     for f in facts:
-        cat = f.get("cat", "其他") if isinstance(f, dict) else "其他"
+        cat = (f.get("cat") or "其他") if isinstance(f, dict) else "其他"
         cats[cat] = cats.get(cat, 0) + 1
     cat_str = ", ".join(f"{k}:{v}" for k, v in sorted(cats.items(), key=lambda x: -x[1])[:8])
     return (

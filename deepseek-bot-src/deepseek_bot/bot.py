@@ -674,7 +674,8 @@ from .state_engine import init as state_init, load as state_load, inject_context
 from .memory_engine import (
     retrieve_context, auto_extract_facts, should_summarize, mark_summary_done,
     update_summary, add_fact, get_memory_stats, search_conversations, search_all_users,
-    get_recent_topics, set_pref, get_pref, get_all_prefs, load_memories, check_pending_summary
+    get_recent_topics, set_pref, get_pref, get_all_prefs, load_memories, check_pending_summary,
+    load_all as load_all_memories, clear_memories
 )
 from .group_memory import (
     record_message as grp_record, retrieve_group_context as grp_context,
@@ -4376,7 +4377,7 @@ _NEED_MAP = {
 _ADMIN_ONLY_TOOLS = {
     "sh", "sys", "write", "project", "playbook", "waf", "report", "schedule", "parse", "captcha",
     "data", "lateral", "privesc", "credential", "adaptive_chain", "api_attack", "c2", "cloud",
-    "container", "evasion", "exfil", "tg", "memory", "conversation_search", "fofa", "selfext",
+    "container", "evasion", "exfil", "tg", "conversation_search", "fofa", "selfext",
     "token",
 }
 
@@ -9634,9 +9635,8 @@ def rt(n,a,chat_id=None,uid=None):
                 # 无key → 提示AI生成摘要
                 return "📝 请在回复中基于现有记忆为用户生成一段简洁的摘要，然后调用 memory act=summarize key=摘要内容"
             if act=="clear":
-                try: os.remove(f"/opt/deepseek-bot/memories/u{uid}.json")
-                except: pass
-                return "✅ 记忆已清除"
+                # 2026-10-22: 连带清掉会话级文件(原来只删 u{uid}.json, 会话级记忆清不干净)
+                return f"✅ 已清除 {clear_memories(_ruid)} 份记忆文件"
             return "memory: add|search|stats|pref|summarize|clear"
         if n=="whois":
             # 查TG用户名→用户ID(主账号get_entity秒查, 别用双号绕路): name=用户名(可带@)
@@ -13542,6 +13542,46 @@ async def main():
         try: _PF_F.write_text(json.dumps(_PREFILL_ON), encoding="utf-8")
         except: pass
 
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:learn|remember|记住|学一下)\s*([\s\S]+)$"))
+    async def _(e):
+        # 2026-10-22 老板「给bot添加学习功能, 让他记住东西」: 一句 /learn 直接落库, 不依赖模型
+        _txt = (e.pattern_match.group(1) or "").strip()
+        if len(_txt) < 2:
+            await e.reply("用法: /learn 要记住的内容(例: /learn 我住香港, 习惯凌晨干活)")
+            return
+        try:
+            add_fact(str(e.sender_id), _txt[:600])
+            _n = len(load_all_memories(str(e.sender_id)).get("facts") or [])
+        except Exception as _ex:
+            await e.reply(f"❌ 保存失败: {type(_ex).__name__}: {_ex}")
+            return
+        await e.reply(f"✅ 已记住({_n} 条)\n<pre>{_hesc(_txt[:180])}</pre>\n"
+                      f"<i>随时发 /mem 查看, 以后对话会自动带上</i>", parse_mode="HTML")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:mem|memory|记忆|我的记忆)\b"))
+    async def _(e):
+        # 2026-10-22: 看看它到底记住了什么(会话级+用户级合并)
+        try:
+            _hk_local = _hkey(e.sender_id, e.chat_id)
+            _d = load_all_memories(_hk_local)
+            _facts = _d.get("facts") or []
+            _prefs = _d.get("prefs") or {}
+            _out = get_memory_stats(_hk_local)
+            if _d.get("summary"):
+                _out += f"\n\n📝 摘要: {_d['summary'][:200]}"
+            if _prefs:
+                _out += "\n⚙️ 偏好: " + ", ".join(f"{k}={v}" for k, v in list(_prefs.items())[:6])
+            _recent = []
+            for _f in sorted(_facts, key=lambda x: (x.get("ts", 0) if isinstance(x, dict) else 0), reverse=True)[:8]:
+                _recent.append("· " + (_f.get("text") if isinstance(_f, dict) else str(_f)))
+            if _recent:
+                _out += "\n\n最近记住:\n" + "\n".join(_recent)
+            else:
+                _out += "\n\n还没有记住任何东西, 发 /learn 内容 试试"
+        except Exception as _ex:
+            _out = f"读取记忆失败: {type(_ex).__name__}: {_ex}"
+        await e.reply(f"🧠 <b>我的记忆</b>\n<pre>{_hesc(_out[:3500])}</pre>", parse_mode="HTML")
+
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:check|selfcheck|token|自检)\b"))
     async def _(e):
         # 2026-10-22 老板「机器人自检token, 能询问机器人余额」: 一条命令看全所有凭据是否生效
@@ -14978,7 +15018,7 @@ async def main():
             pass
         try:
             # ④ 明确要求记住 → memory 落库
-            if re.search(r'(记住|记一下|记下来|给我记|以后都|以后要|我的习惯|我的偏好|别忘)', _t_s):
+            if re.search(r'(记住|记一下|记下来|给我记|记着|以后都|以后要|我的习惯|我的偏好|别忘|学一下|学会|教你|学习)', _t_s):
                 m.append({"role": "user", "content":
                           "【工具指令·系统附加, 非用户闲聊】用户要求长期记住: 立即用 memory 工具落库(事实用 act=add, 偏好用 act=pref), 写完一句话确认即可。"})
                 print("[mem] 注入记忆指令", flush=True)
