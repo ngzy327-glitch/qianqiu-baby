@@ -1,6 +1,7 @@
 # ==== 必需 ====
 telethon>=1.44.0
 httpx>=0.27
+socksio>=1.0            # httpx 走 socks5 代理(看板探测账号出口 IP)
 requests>=2.31
 python-dotenv>=1.0
 Pillow>=10.0

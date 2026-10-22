@@ -2032,14 +2032,16 @@ async def file_get(request: Request):
 
 
 # ==================== 多账号看板(2026-10-22) ====================
-_IP_CACHE = {}                       # proxy_key -> (ts, ip)
-_IP_TTL = 60                         # 秒
+_IP_CACHE = {}                       # proxy_key -> {"ip","ms","at","ok"}
+_IP_TTL = 20                         # 秒; ?fresh=1 可绕过
 _IP_ENDPOINTS = [                    # 一个挂了换下一个
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
     "https://checkip.amazonaws.com",
     "https://icanhazip.com",
 ]
+_FP_KEYS = ("ua", "viewport", "screen", "tz", "lang", "platform",
+            "hardware_concurrency", "device_memory", "webgl")
 
 
 def _proxy_url(px):
@@ -2055,65 +2057,133 @@ def _proxy_url(px):
     return f"{scheme}://{auth}{host}:{port}"
 
 
-def _probe_public_ip(proxy_cfg=None):
-    """走指定代理请求公共端点, 拿到真实出口 IP; 失败返回空字符串"""
-    import time as _t
-    px_url = _proxy_url(proxy_cfg) if proxy_cfg else ""
+async def _probe_ip(proxy_cfg=None, fresh=False):
+    """走该账号自己的代理请求公共端点, 拿真实出口 IP
+
+    异步 + 账号间并发: 10 个号不会排队等 6 秒超时。
+    结果缓存 _IP_TTL 秒; fresh=True 时强制重探(看板"立即探测"按钮)。
+    """
+    import httpx
+    px_url = _proxy_url(proxy_cfg) if isinstance(proxy_cfg, dict) else ""
     key = px_url or "__direct__"
-    now = _t.time()
-    cached = _IP_CACHE.get(key)
-    if cached and now - cached[0] < _IP_TTL:
-        return cached[1]
+    _hit = _IP_CACHE.get(key)
+    if _hit and not fresh and time.time() - _hit["at"] < _IP_TTL:
+        return dict(_hit, cached=True, ago=int(time.time() - _hit["at"]))
+    _t0 = time.time()
+    _err = ""
     try:
-        import httpx
-        kw = {"timeout": httpx.Timeout(6, connect=4)}
+        _kw = {"timeout": httpx.Timeout(6.0, connect=4.0), "follow_redirects": True}
         if px_url:
-            kw["proxies"] = {"https://": px_url, "http://": px_url}
-        for ep in _IP_ENDPOINTS:
             try:
-                r = httpx.get(ep, **kw)
-                if r.status_code == 200 and r.text:
-                    ip = r.text.strip()[:64]
-                    _IP_CACHE[key] = (now, ip)
-                    return ip
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return ""
+                _cli = httpx.AsyncClient(proxy=px_url, **_kw)     # httpx>=0.26
+            except TypeError:
+                _cli = httpx.AsyncClient(proxies={"all://": px_url}, **_kw)
+        else:
+            _cli = httpx.AsyncClient(**_kw)
+        async with _cli:
+            for _ep in _IP_ENDPOINTS:
+                if time.time() - _t0 > 7:      # 总预算 7s, 别让看板请求拖到 20s+
+                    break
+                try:
+                    _r = await _cli.get(_ep)
+                    _txt = (_r.text or "").strip().splitlines()[0][:64] if _r.text else ""
+                    if _r.status_code == 200 and _txt:
+                        _out = {"ip": _txt, "ms": int((time.time() - _t0) * 1000),
+                                "at": time.time(), "ok": True}
+                        _IP_CACHE[key] = dict(_out)
+                        return dict(_out, cached=False, ago=0)
+                    _err = f"HTTP {_r.status_code}"
+                except Exception as _e:
+                    _err = type(_e).__name__
+    except Exception as _e:
+        _err = type(_e).__name__
+    _err = {
+        "ConnectError": "代理/端点连接失败",
+        "ConnectTimeout": "连接超时",
+        "ReadTimeout": "读取超时",
+        "ProxyError": "代理握手失败",
+        "ImportError": "缺 socksio(装 httpx[socks])",
+    }.get(_err, _err)
+    _fail = {"ip": "", "ms": int((time.time() - _t0) * 1000), "at": time.time(),
+             "ok": False, "error": _err[:40] or "探测失败"}
+    _IP_CACHE[key] = dict(_fail)               # 失败也缓存, 避免每 5s 重打一轮超时
+    return dict(_fail, cached=False, ago=0)
 
 
 def _collect_web_sessions():
-    """问 web_session daemon 要当前存活浏览器列表"""
-    import sys as _s
-    _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
-    if _base not in _s.path:
-        _s.path.insert(0, _base)
+    """读常驻会话列表(只读: daemon 不在就返回空, 绝不在这里拉起浏览器进程)"""
+    import socket as _sk
+    _sock = os.path.join(os.getenv("BOT_BASE", "/opt/deepseek-bot"), "web_session.sock")
+    if not os.path.exists(_sock):
+        return {}
     try:
-        from knowledge.toolPlugins.web_session import call as _ws_call
-        r = _ws_call({"act": "list"})
-        if r.get("ok"):
-            return {s["account"]: s for s in r.get("sessions") or []}
+        _s = _sk.socket(_sk.AF_UNIX, _sk.SOCK_STREAM)
+        _s.settimeout(1.5)
+        _s.connect(_sock)
+        _s.sendall(b'{"act":"list"}\n')
+        _buf = b""
+        while b"\n" not in _buf:
+            _ch = _s.recv(65536)
+            if not _ch:
+                break
+            _buf += _ch
+        _s.close()
+        _r = json.loads(_buf.decode("utf-8").strip() or "{}")
+        if _r.get("ok"):
+            return {x["account"]: x for x in _r.get("sessions") or []}
     except Exception:
         pass
     return {}
 
 
-def _accounts_data():
-    """账号状态 + 审计尾部 + 待审批数 + 指纹/代理/实时出口 IP"""
+def _resolve_web_fp(account, cfg):
+    """该账号浏览器**实际生效**的指纹
+
+    直接复用 web_session_daemon._resolve_profile(模板 + accounts.json 覆盖),
+    保证看板显示值与真正 launch 时用的值完全同源, 不是另外猜一份。
+    """
+    _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
+    try:
+        import sys as _s
+        if _base not in _s.path:
+            _s.path.insert(0, _base)
+        import web_session_daemon as _wsd
+        _prof = _wsd._resolve_profile(account, {})
+        _out = {"profile": _prof.get("_name") or "", "source": "resolved"}
+        for _k in _FP_KEYS:
+            if _prof.get(_k) is not None:
+                _out[_k] = _prof[_k]
+        return _out
+    except Exception as _e:
+        _web = (cfg or {}).get("web") or {}
+        return {"profile": _web.get("profile") or "desktop_cn",
+                "source": "fallback", "error": type(_e).__name__}
+
+
+async def _accounts_data(fresh=False):
+    """账号状态 + 指纹 + 实时出口 IP + 审计尾部 + 待审批数"""
     import sys as _s
     _base = os.getenv("BOT_BASE", "/opt/deepseek-bot")
     if _base not in _s.path:
         _s.path.insert(0, _base)
     _ws_map = _collect_web_sessions()
+    _accs = []
     try:
         import tg_user as _tu
-        _accs = []
-        for _n, _c in _tu.ACCOUNTS.items():
+        _items = list(_tu.ACCOUNTS.items())
+    except Exception as _e:
+        _items = []
+        _accs.append({"key": "?", "name": f"读取失败: {_e}", "username": "",
+                      "phone": "", "session_ok": False, "device": {},
+                      "net": {"mode": "direct", "ip": "", "ok": False, "error": "配置读取失败"},
+                      "fingerprint": {}, "web_session": {"alive": False}})
+    if _items:
+        # 所有账号并发探测, 互不阻塞
+        _nets = await asyncio.gather(*[_probe_ip((c or {}).get("proxy")) for _, c in _items])
+        for (_n, _c), _net in zip(_items, _nets):
+            _c = _c or {}
             _px = _c.get("proxy") or {}
-            _ip = _probe_public_ip(_px)
             _device = _c.get("device") or {}
-            _web = _c.get("web") or {}
             _ws = _ws_map.get(_n)
             _accs.append({
                 "key": _n,
@@ -2121,29 +2191,30 @@ def _accounts_data():
                 "username": _c.get("username", ""),
                 "phone": _c.get("phone", ""),
                 "session_ok": os.path.exists(str(_c.get("session", ""))),
-                # TG 侧指纹(Telethon)
+                # TG 侧指纹(Telethon 登录时上报)
                 "device": {
                     "device_model": _device.get("device_model", ""),
                     "system_version": _device.get("system_version", ""),
                     "app_version": _device.get("app_version", ""),
                     "lang_code": _device.get("lang_code", ""),
+                    "configured": bool(_device),
                 },
-                # TG 侧代理
-                "proxy": {
+                # 出口 IP: 走该号自己的代理去问公共端点
+                "net": {
+                    "mode": "proxy" if _px.get("host") else "direct",
                     "type": _px.get("type", ""),
                     "host": _px.get("host", ""),
                     "port": int(_px.get("port") or 0),
                     "has_auth": bool(_px.get("user")),
-                    "exit_ip": _ip,
-                } if _px.get("host") else {
-                    "type": "direct", "host": "", "port": 0, "has_auth": False,
-                    "exit_ip": _ip,
+                    "ip": _net.get("ip", ""),
+                    "ok": bool(_net.get("ok")),
+                    "ms": int(_net.get("ms") or 0),
+                    "ago": int(_net.get("ago") or 0),
+                    "cached": bool(_net.get("cached")),
+                    "error": _net.get("error", ""),
                 },
-                # 网页侧指纹
-                "web": {
-                    "profile": _web.get("profile", "desktop_cn"),
-                    "profile_set": bool(_web),
-                },
+                # 网页侧指纹(模板 + 账号覆盖后的实际值)
+                "fingerprint": _resolve_web_fp(_n, _c),
                 # web_session 常驻状态
                 "web_session": {
                     "alive": bool(_ws),
@@ -2153,10 +2224,20 @@ def _accounts_data():
                     "idle": (_ws or {}).get("idle", 0),
                 },
             })
-    except Exception as _e:
-        _accs = [{"key": "?", "name": f"读取失败: {_e}", "username": "", "session_ok": False,
-                  "device": {}, "proxy": {"type": "direct", "host": "", "exit_ip": ""},
-                  "web": {}, "web_session": {"alive": False}}]
+    # 独立 IP 校验: 两个号出口相同直接标红
+    _groups = {}
+    for _a in _accs:
+        _ip = (_a.get("net") or {}).get("ip") or ""
+        if _ip:
+            _groups.setdefault(_ip, []).append(_a["key"])
+    _shared = []
+    for _ip, _ks in _groups.items():
+        if len(_ks) > 1:
+            _shared.append({"ip": _ip, "accounts": _ks})
+            for _a in _accs:
+                if _a["key"] in _ks:
+                    _a["net"]["shared"] = True
+                    _a["net"]["shared_with"] = [k for k in _ks if k != _a["key"]]
     _audit = []
     try:
         _log_p = os.path.join(_base, "audit.log")
@@ -2175,129 +2256,229 @@ def _accounts_data():
         _pend = len(getattr(_B2, "_TG_APPROVAL", {}) or globals().get("_TG_APPROVAL", {}))
     except Exception:
         pass
-    return {"accounts": _accs, "audit": _audit, "pending_approvals": _pend}
+    _summary = {
+        "total": len(_accs),
+        "logged_in": sum(1 for _a in _accs if _a.get("session_ok")),
+        "browser_alive": sum(1 for _a in _accs if (_a.get("web_session") or {}).get("alive")),
+        "ip_ok": sum(1 for _a in _accs if (_a.get("net") or {}).get("ok")),
+        "shared_ips": _shared,
+        "tbody": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return {"accounts": _accs, "audit": _audit, "pending_approvals": _pend,
+            "summary": _summary, "ip_ttl": _IP_TTL}
 
 
 @app.get("/api/accounts")
 async def api_accounts(request: Request):
     await _require_admin(request)
-    return {"ok": True, **_accounts_data()}
+    _fresh = (request.query_params.get("fresh") or "") in ("1", "true", "yes")
+    _d = await _accounts_data(fresh=_fresh)
+    return JSONResponse({"ok": True, **_d}, headers={"Cache-Control": "no-store"})
 
 
 _ACC_BOARD_HTML = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>账号看板 · ngzy-plus</title>
+<title>账号控制台 · ngzy-plus</title>
 <style>
+:root{--bg:#0b0d12;--card:#14171f;--line:#1f2330;--line2:#2a3042;--fg:#e6e8ee;--dim:#6b7280;--ok:#4ade80;--bad:#f87171;--blue:#60a5fa;--amber:#fbbf24}
 *{box-sizing:border-box}
-body{background:#0b0d12;color:#e6e8ee;font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;margin:0;padding:20px;line-height:1.5}
-h1{font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:8px}
-h1 .dot{width:10px;height:10px;background:#4ade80;border-radius:50%;display:inline-block;animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-h2{font-size:12px;color:#6b7280;margin:24px 0 10px;letter-spacing:.08em;text-transform:uppercase}
-.card{background:#14171f;border:1px solid #1f2330;border-radius:14px;padding:16px 18px;margin-bottom:10px}
-.card:hover{border-color:#2a3042}
-.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.head .name{font-weight:600;font-size:15px}
-.head .sub{color:#6b7280;font-size:12px;margin-left:6px}
-.st{font-size:12px;padding:3px 10px;border-radius:20px}
-.st-ok{background:#0f2a1a;color:#4ade80;border:1px solid #16422a}
-.st-bad{background:#2a1414;color:#f87171;border:1px solid #421616}
-.st-info{background:#131c2e;color:#60a5fa;border:1px solid #1e3050}
-.st-idle{background:#1c1a12;color:#fbbf24;border:1px solid #423916}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 24px}
-@media(max-width:700px){.grid{grid-template-columns:1fr}}
-.blk-title{font-size:11px;color:#6b7280;margin-bottom:6px;letter-spacing:.06em}
-.kv{display:flex;font-size:12px;padding:2px 0}
-.kv .k{color:#6b7280;min-width:92px;flex-shrink:0}
-.kv .v{color:#e6e8ee;word-break:break-all}
-.ip{font-family:"SF Mono",Menlo,Consolas,monospace;background:#0d1220;color:#60a5fa;padding:1px 6px;border-radius:4px;font-size:12px;letter-spacing:.02em}
-.ip.loading{color:#fbbf24}
-.ip.fail{color:#f87171}
-.web-sesh{background:#0d1a10;border:1px solid #143220;border-radius:8px;padding:10px 12px;margin-top:8px}
-.web-sesh.off{background:#16191f;border-color:#1f2330}
-.tag{font-size:10px;background:#1f2330;border-radius:4px;padding:1px 6px;margin-left:4px;color:#8b93a3}
-table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:8px 10px;border-bottom:1px solid #1f2330;text-align:left}
-th{color:#6b7280;font-weight:normal;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
-.dim{color:#6b7280;font-size:12px}
-.toolbar{display:flex;gap:8px;margin-bottom:14px;color:#6b7280;font-size:12px}
-.toolbar .spacer{flex:1}
-.toolbar button{background:#1f2330;color:#e6e8ee;border:1px solid #2a3042;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px}
-.toolbar button:hover{border-color:#60a5fa}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,"PingFang SC","Segoe UI",sans-serif;margin:0;padding:0 20px 36px;line-height:1.5}
+.top{position:sticky;top:0;z-index:9;background:rgba(11,13,18,.93);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);margin:0 -20px;padding:11px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-weight:700;font-size:15px}
+.brand .sub{font-weight:400;color:var(--dim);font-size:12px;margin-left:7px}
+.live{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pl 2s infinite}
+.dot.bad{background:var(--bad);animation:none}
+@keyframes pl{0%{box-shadow:0 0 0 0 rgba(74,222,128,.5)}70%{box-shadow:0 0 0 7px rgba(74,222,128,0)}100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}}
+.spacer{flex:1}
+button{background:var(--line);color:var(--fg);border:1px solid var(--line2);border-radius:7px;padding:5px 11px;cursor:pointer;font-size:12px;transition:.15s}
+button:hover{border-color:var(--blue);color:#fff}
+button.on{background:#13221a;border-color:#1d4a30;color:var(--ok)}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0 4px}
+@media(max-width:820px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:11px 14px}
+.tile .n{font-size:21px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.tile .l{font-size:10px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-top:2px}
+.tile.warn{border-color:#7a3018;background:#1d120d}
+.tile.warn .n{color:var(--bad)}
+h2{font-size:11px;color:var(--dim);margin:26px 0 10px;letter-spacing:.1em;text-transform:uppercase}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px;transition:border-color .2s}
+.card:hover{border-color:var(--line2)}
+.head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.head .name{font-weight:650;font-size:15px}
+.head .sub{color:var(--dim);font-size:12px}
+.st{font-size:11px;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.st-ok{background:#0f2a1a;color:var(--ok);border:1px solid #16422a}
+.st-bad{background:#2a1414;color:var(--bad);border:1px solid #421616}
+.st-idle{background:#1c1a12;color:var(--amber);border:1px solid #423916}
+.cols{display:grid;grid-template-columns:1.02fr 1fr 1.3fr;gap:14px}
+@media(max-width:980px){.cols{grid-template-columns:1fr}}
+.blk{background:#10131a;border:1px solid #1b1f2a;border-radius:10px;padding:10px 12px;min-width:0}
+.blk-t{font-size:10px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;display:flex;gap:6px;align-items:center}
+.blk-t .tag{text-transform:none;letter-spacing:0}
+.kv{display:flex;gap:8px;font-size:12px;padding:2px 0;min-width:0}
+.kv .k{color:var(--dim);flex:0 0 76px}
+.kv .v{flex:1;min-width:0;word-break:break-all}
+.mono{font-family:"SF Mono",Menlo,Consolas,monospace}
+.ipbig{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:18px;color:var(--blue);letter-spacing:.02em;line-height:1.35}
+.ipbig.none{color:var(--dim);font-size:13px}
+.ipbig.bad{color:var(--bad);font-size:13px}
+.meta{font-size:11px;color:var(--dim)}
+.tag{font-size:10px;background:#232838;border-radius:4px;padding:1px 6px;color:#9aa3b5;white-space:nowrap}
+.tag.red{background:#3a1616;color:#fca5a5}
+.tag.green{background:#13291d;color:#86efac}
+.ua{font-size:11px;color:#9aa3b5}
+.kv .v.ua{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}
+.warnbar{background:#241611;border:1px solid #5a2a14;color:#fdba74;border-radius:10px;padding:10px 14px;font-size:12px;margin-bottom:12px}
+.sess{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--dim);margin-top:10px;padding-top:9px;border-top:1px dashed #1f2330;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--dim);font-weight:400;font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.dim{color:var(--dim)}
 </style></head><body>
-<h1>🐳 ngzy-plus · 账号看板</h1>
-<div class="toolbar">
-  <span id="uptime">加载中…</span>
-  <span class="spacer"></span>
-  <button onclick="location.reload()">⟳ 刷新</button>
+<div class="top">
+  <div class="brand">🐳 ngzy-plus<span class="sub">账号控制台</span></div>
+  <div class="live"><span class="dot" id="dot"></span><span id="stat">连接中…</span></div>
+  <div class="spacer"></div>
+  <span class="dim mono" id="tick" style="font-size:11px"></span>
+  <button id="btnFresh">⟳ 立即探测 IP</button>
+  <button id="btnAuto" class="on">自动刷新 5s</button>
 </div>
+<div class="tiles" id="tiles"></div>
+<div id="warn"></div>
+<h2>账号</h2>
 <div id="acc"></div>
 <h2>审计流水 · 最近 30 条</h2>
 <div class="card" style="padding:0;overflow-x:auto"><table id="audit">
-<tr><th>时间</th><th>账号</th><th>操作</th><th>参数</th><th>结果</th><th>备注</th></tr></table></div>
+<thead><tr><th>时间</th><th>账号</th><th>操作</th><th>参数</th><th>结果</th><th>备注</th></tr></thead><tbody></tbody></table></div>
 <script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtSec=s=>{if(!s)return"-";if(s<60)return s+"秒";if(s<3600)return Math.floor(s/60)+"分"+(s%60)+"秒";return Math.floor(s/3600)+"时"+Math.floor(s%3600/60)+"分"};
+const ago=s=>s<=2?'刚刚':(s<60?s+' 秒前':(s<3600?Math.floor(s/60)+' 分钟前':Math.floor(s/3600)+' 小时前'));
+const trunc=(s,n)=>{s=String(s||'');return s.length>n?s.slice(0,n)+'…':s};
+const kv=(k,v)=>`<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`;
+function tile(label,val,warn){
+  return `<div class="tile${warn?' warn':''}"><div class="n">${esc(val)}</div><div class="l">${label}</div></div>`;
+}
+function netBlock(n){
+  let big,meta;
+  if(n.ok){
+    big=`<div class="ipbig">${esc(n.ip)}</div>`;
+    meta=`<div class="meta">${n.ms}ms · ${n.cached?'缓存(20s 内)':'刚刚实时探测'} · ${ago(n.ago)}</div>`;
+  }else{
+    big=`<div class="ipbig bad">${esc(n.error||'探测失败')}</div>`;
+    meta=`<div class="meta">${n.mode==='proxy'?'代理不可达或端点超时':'服务器主动探测被阻断'} · 点右上角重试</div>`;
+  }
+  const px = n.mode==='proxy'
+    ? kv('代理', n.type+'://'+n.host+':'+n.port+(n.has_auth?' (有密码)':''))
+    : `<div class="kv"><span class="k">代理</span><span class="v">直连<span class="tag red">无独立出口</span></span></div>`;
+  const shared = n.shared
+    ? `<div class="kv"><span class="k">告警</span><span class="v"><span class="tag red">与其他账号共用 ${esc((n.shared_with||[]).join(', '))}</span></span></div>`
+    : '';
+  return `<div class="blk"><div class="blk-t">出口 IP ${n.mode==='proxy'?'· 独立代理':'· 直连'}</div>${big}${meta}${px}${shared}</div>`;
+}
+function tgBlock(d){
+  const miss = d.configured?'':'<span class="tag">未配置 · 用默认</span>';
+  return `<div class="blk"><div class="blk-t">TG 指纹 ${miss}</div>`+
+    kv('设备', d.device_model||'(默认)')+
+    kv('系统', d.system_version||'(默认)')+
+    kv('客户端', d.app_version||'(默认)')+
+    kv('语言', d.lang_code||'(默认)')+
+    `</div>`;
+}
+function fpBlock(f){
+  const vw=(f.viewport||[]).join('×')||'-';
+  const sc=(f.screen||[]).join('×')||'-';
+  const wg=(f.webgl||[]).length===2?f.webgl[0]+' / '+f.webgl[1]:'';
+  const src = f.source==='resolved'
+    ? '<span class="tag green">与浏览器同源</span>'
+    : '<span class="tag red">解析失败</span>';
+  return `<div class="blk"><div class="blk-t">网页指纹 <span class="tag">${esc(f.profile||'-')}</span>${src}</div>`+
+    `<div class="kv"><span class="k">UA</span><span class="v ua mono" title="${esc(f.ua||'')}">${esc(trunc(f.ua,58))}</span></div>`+
+    kv('平台', f.platform||'-')+
+    kv('时区/语言', (f.tz||'-')+' · '+(f.lang||'-'))+
+    kv('视口/屏幕', vw+' / '+sc)+
+    kv('CPU/内存', (f.hardware_concurrency||'-')+' 核 / '+(f.device_memory||'-')+' GB')+
+    kv('WebGL', wg||'-')+
+    `</div>`;
+}
 function renderAcc(a){
-  const st_session=a.session_ok
+  const d=a.device||{}, n=a.net||{}, f=a.fingerprint||{}, ws=a.web_session||{};
+  const stS=a.session_ok
     ? '<span class="st st-ok">● 会话已登录</span>'
     : '<span class="st st-bad">○ 未登录</span>';
-  const d=a.device||{};
-  const px=a.proxy||{};
-  const web=a.web||{};
-  const ws=a.web_session||{};
-  let devHtml=
-    `<div class="blk-title">TG 指纹</div>`+
-    `<div class="kv"><span class="k">device_model</span><span class="v">${d.device_model||'(默认)'}</span></div>`+
-    `<div class="kv"><span class="k">system_version</span><span class="v">${d.system_version||'(默认)'}</span></div>`+
-    `<div class="kv"><span class="k">app_version</span><span class="v">${d.app_version||'(默认)'}</span></div>`+
-    `<div class="kv"><span class="k">lang_code</span><span class="v">${d.lang_code||'(默认)'}</span></div>`;
-  const pxAuth=px.has_auth?'<span class="tag">有账号密码</span>':'';
-  let pxHtml=
-    `<div class="blk-title">代理出口</div>`+
-    `<div class="kv"><span class="k">代理</span><span class="v">`+
-    (px.host?`<code>${px.type}://${px.host}:${px.port}</code>${pxAuth}`:'<span style="color:#6b7280">直连(无代理)</span>')+`</span></div>`+
-    `<div class="kv"><span class="k">真实出口 IP</span><span class="v">`+
-    (px.exit_ip?`<span class="ip">${px.exit_ip}</span>`:`<span class="ip loading">探测中…</span>`)+`</span></div>`;
-  let webHtml=`<div class="blk-title">网页指纹</div>`+
-    `<div class="kv"><span class="k">profile</span><span class="v">${web.profile||'desktop_cn'}${web.profile_set?'':'<span class="tag">默认</span>'}</span></div>`;
-  let wsHtml='';
-  if(ws.alive){
-    wsHtml=`<div class="web-sesh">`+
-      `<div class="kv"><span class="k">浏览器</span><span class="v"><span class="st st-ok">● 常驻中</span> <span class="tag">${ws.profile||web.profile||''}</span></span></div>`+
-      `<div class="kv"><span class="k">当前页</span><span class="v">${ws.title||'(加载中)'} <span class="dim">${ws.url||''}</span></span></div>`+
-      `<div class="kv"><span class="k">空闲</span><span class="v">${fmtSec(ws.idle)}</span></div>`+
-    `</div>`;
-  }else{
-    wsHtml=`<div class="web-sesh off">`+
-      `<div class="kv"><span class="k">浏览器</span><span class="v"><span class="st st-idle">○ 未启动</span> <span class="dim">用 "open" 打开并常驻</span></span></div>`+
-    `</div>`;
-  }
+  const stB=ws.alive
+    ? '<span class="st st-ok">● 浏览器常驻</span>'
+    : '<span class="st st-idle">○ 浏览器未启动</span>';
+  const sess=ws.alive
+    ? `<div class="sess"><span class="mono">${esc(ws.profile||'')}</span>`+
+      `<span>${esc(trunc(ws.title,40)||'(加载中)')}</span>`+
+      `<span class="dim mono">${esc(trunc(ws.url,70))}</span>`+
+      `<span>空闲 ${fmtSec(ws.idle)}</span></div>`
+    : `<div class="sess"><span>让 AI 用 open 打开一次, 页面即常驻; 关进程登录态也不丢</span></div>`;
   return `<div class="card">`+
-    `<div class="head"><div><span class="name">${a.name}</span> <span class="sub">${a.username||a.phone||'#'+a.key}</span></div>${st_session}</div>`+
-    `<div class="grid">${devHtml}${pxHtml}${webHtml}</div>${wsHtml}`;
+    `<div class="head"><span class="name">${esc(a.name)}</span>`+
+    `<span class="sub">${esc(a.username||a.phone||'#'+a.key)}</span>${stS}${stB}</div>`+
+    `<div class="cols">${netBlock(n)}${tgBlock(d)}${fpBlock(f)}</div>${sess}</div>`;
 }
-async function load(){
-  const t0=Date.now();
-  const r=await fetch('/api/accounts');
-  const d=await r.json();
-  let h='';
+function render(d){
+  const s=d.summary||{};
+  const shared=s.shared_ips||[];
+  $('tiles').innerHTML=
+    tile('账号总数', s.total||0)+
+    tile('会话已登录', (s.logged_in||0)+' / '+(s.total||0))+
+    tile('IP 探测成功', (s.ip_ok||0)+' / '+(s.total||0))+
+    tile('IP 重复告警', shared.length, shared.length>0);
+  let w='';
   if(d.pending_approvals>0){
-    h+=`<div class="card" style="border-color:#b45309;background:#2a2012">
-        ✋ 待审批操作: <b>${d.pending_approvals}</b> 条 &nbsp;<span class="dim">(去 TG 里点批准按钮处理)</span>
-      </div>`;
+    w+=`<div class="warnbar">✋ 有 <b>${d.pending_approvals}</b> 条写操作待批准 · 去 Telegram 点"批准 / 拒绝"</div>`;
   }
-  (d.accounts||[]).forEach(a=>h+=renderAcc(a));
-  document.getElementById('acc').innerHTML=h||'<div class="card dim">无账号</div>';
-  let rows='';
-  (d.audit||[]).forEach(x=>{
-    rows+=`<tr><td class="dim">${x.ts||''}</td><td>${x.account||''}</td><td>${x.act||''}</td>
-      <td class="dim">${(x.args||[]).join(', ')}</td>
-      <td>${x.ok?'<span class="st st-ok" style="padding:2px 8px">✓</span>':'<span class="st st-bad" style="padding:2px 8px">✗</span>'}</td>
-      <td class="dim">${x.note||''}</td></tr>`;
+  shared.forEach(x=>{
+    w+=`<div class="warnbar">⚠ 出口 IP 重复: <b class="mono">${esc(x.ip)}</b> → ${esc(x.accounts.join(' / '))} · 违背"一账号一 IP", 建议给其中一个换代理</div>`;
   });
-  document.getElementById('audit').innerHTML=`<tr><th>时间</th><th>账号</th><th>操作</th><th>参数</th><th>结果</th><th>备注</th></tr>`+rows;
-  document.getElementById('uptime').textContent='上次刷新 '+Math.round((Date.now()-t0)/1000)+'s ago';
+  $('warn').innerHTML=w;
+  $('acc').innerHTML=(d.accounts||[]).map(renderAcc).join('')||'<div class="card dim">还没有账号</div>';
+  $('audit').querySelector('tbody').innerHTML=(d.audit||[]).map(x=>
+    `<tr><td class="dim mono">${esc(x.ts||'')}</td><td>${esc(x.account||'')}</td><td>${esc(x.act||'')}</td>`+
+    `<td class="dim">${esc((x.args||[]).join(', '))}</td>`+
+    `<td>${x.ok?'<span class="st st-ok">✓</span>':'<span class="st st-bad">✗</span>'}</td>`+
+    `<td class="dim">${esc(x.note||'')}</td></tr>`).join('');
 }
-load(); setInterval(load, 15000);
+let TTL=5000, deadline=0, busy=false;
+async function load(fresh){
+  if(busy)return; busy=true;
+  $('stat').textContent=fresh?'强制探测中…':'刷新中…';
+  $('dot').classList.remove('bad');
+  const t0=Date.now();
+  try{
+    const r=await fetch('/api/accounts'+(fresh?'?fresh=1':''));
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    render(d);
+    $('stat').textContent='实时 · '+((d.summary&&d.summary.tbody)||'').slice(11)+' · '+(Date.now()-t0)+'ms';
+  }catch(e){
+    $('stat').textContent='连接失败: '+e.message;
+    $('dot').classList.add('bad');
+  }finally{
+    busy=false;
+    deadline=Date.now()+TTL;
+  }
+}
+$('btnFresh').onclick=()=>load(true);
+$('btnAuto').onclick=()=>{
+  TTL=TTL?0:5000;
+  $('btnAuto').classList.toggle('on',!!TTL);
+  $('btnAuto').textContent=TTL?'自动刷新 5s':'自动刷新已关';
+  deadline=TTL?Date.now()+TTL:0;
+};
+setInterval(()=>{
+  if(!TTL){$('tick').textContent='自动刷新已关闭';return;}
+  const left=Math.max(0,Math.ceil((deadline-Date.now())/1000));
+  $('tick').textContent='下次 '+left+'s';
+  if(deadline&&Date.now()>=deadline){deadline=0;load(false);}
+},1000);
+load(false);
 </script></body></html>"""
 
 
