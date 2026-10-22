@@ -21,15 +21,19 @@
   
   # 账号B同理: python3 tg_user.py acct2 ...
 
-账号:
-  acct1   = 账号A (+10000000000)   @YOUR_ACCOUNT
-  acct2  = 账号B (+10000000000)       @YOUR_ACCOUNT
+账号(全部由 .env 配置, 不填则用下面的默认值):
+  TG_API_ID / TG_API_HASH            API凭据(默认官方公开 2040)
+  TG_SESSION_DIR                     session 存放目录(默认 /opt/deepseek-bot/sessions)
+  TG_ACCT1_PHONE / TG_ACCT1_USERNAME / TG_ACCT1_NAME / TG_ACCT1_SESSION / TG_ACCT1_TG_ID
+  TG_ACCT2_PHONE / TG_ACCT2_USERNAME / TG_ACCT2_NAME / TG_ACCT2_SESSION / TG_ACCT2_TG_ID
+  acct1 = 账号A   acct2 = 账号B
 """
 
 import os
 import sys
 import json
 import asyncio
+from pathlib import Path
 from datetime import datetime, timezone
 from collections import Counter
 from telethon import TelegramClient
@@ -38,24 +42,37 @@ from telethon.tl.types import PeerUser
 from telethon.tl.types import PeerChannel, PeerChat, ReactionEmoji
 from telethon.errors import SessionPasswordNeededError
 
-API_ID = 2047129
-API_HASH = "c8c5c2f0e4f1e3a6b9d8f7e6a5b4c3d2"
+# 独立 CLI 也要读 .env: bot 进程由 run.py 加载, ssh 手跑本脚本时补一份(不覆盖已有环境变量)
+try:
+    from dotenv import load_dotenv
+    for _envp in (Path(__file__).resolve().parent, Path(os.getenv("BOT_BASE") or "/opt/deepseek-bot")):
+        if (_envp / ".env").exists():
+            load_dotenv(_envp / ".env", override=False)
+            break
+except Exception:
+    pass
+
+# API 凭据: 优先 .env, 缺省用官方公开的 2040
+API_ID = int(os.getenv("TG_API_ID") or 2040)
+API_HASH = os.getenv("TG_API_HASH") or "b18441a1ff607e10a989891a5462e627"
+
+_SESS_DIR = os.getenv("TG_SESSION_DIR") or "/opt/deepseek-bot/sessions"
+
+
+def _acct(n, default_name):
+    """账号A/B: 每一项都可被 .env 覆盖"""
+    return {
+        "session": os.getenv(f"TG_ACCT{n}_SESSION") or f"{_SESS_DIR}/account{n}.session",
+        "name": os.getenv(f"TG_ACCT{n}_NAME") or default_name,
+        "phone": os.getenv(f"TG_ACCT{n}_PHONE") or "",
+        "username": os.getenv(f"TG_ACCT{n}_USERNAME") or "",
+        "tg_id": int(os.getenv(f"TG_ACCT{n}_TG_ID") or 0) or None,
+    }
+
 
 ACCOUNTS = {
-    "acct1": {
-        "session": "/opt/deepseek-bot/sessions/account1.session",
-        "name": "账号A",
-        "phone": "+10000000000",
-        "username": "@YOUR_ACCOUNT",
-        "tg_id": None,
-    },
-    "acct2": {
-        "session": "/opt/deepseek-bot/sessions/account2.session",
-        "name": "账号B",
-        "phone": "+10000000000",
-        "username": "@YOUR_ACCOUNT",
-        "tg_id": None,
-    },
+    "acct1": _acct(1, "账号A"),
+    "acct2": _acct(2, "账号B"),
 }
 
 
@@ -279,7 +296,7 @@ async def cmd_click(client, cfg, target, msg_id, row, col):
         print(f"❌ 点击失败: {ex}")
 
 
-async def cmd_buttons(client, cfg, target, msg_id):
+async def cmd_buttons(client, cfg, target, msg_id=None):
     """查看消息所有按钮; msg_id 省略=自动定位最近一条带按钮的消息(模型常漏先读回复拿ID)"""
     try:
         entity = await client.get_entity(target)
@@ -617,7 +634,16 @@ async def cmd_webapp(client, cfg, target, msg_id=None):
     # 🆕 纯数字ID / 无username bot → 交给 relay (内部含 dialog 回退 resolve)
     if msg_id is None and target.isdigit():
         try:
-            await relay_bot_webapp(client, target)
+            # 修复: 之前丢弃了 relay 的返回值, 调用后什么都不打印, 用户看不到任何结果
+            r = await relay_bot_webapp(client, target)
+            print(f"  ✅ bot = @{str(r.get('bot') or target).lstrip('@')}")
+            print(f"  ✅ webapp_url = {r.get('webapp_url')}")
+            print(f"  ✅ webview_url = {(r.get('wv_url') or '')[:600]}")
+            if r.get("init_data"):
+                print(f"  ✅ initData len={len(r['init_data'])}")
+                print(f"  {r['init_data'][:2000]}")
+            else:
+                print("  ⚠️ 拿到 webview 但没有 initData")
         except Exception as ex:
             print(f"  ❌ 打开失败: {type(ex).__name__}: {ex}")
         return
@@ -1414,9 +1440,9 @@ async def main():
             col = int(sys.argv[6])
             await cmd_click(client, cfg, target, msg_id, row, col)
         elif cmd == "buttons":
-            # 查看消息按钮: buttons <群> <消息ID>
+            # 查看消息按钮: buttons <群> [消息ID]  (省略ID=自动定位最近带按钮的消息)
             target = sys.argv[3]
-            msg_id = int(sys.argv[4])
+            msg_id = int(sys.argv[4]) if len(sys.argv) > 4 else None
             await cmd_buttons(client, cfg, target, msg_id)
         elif cmd == "webapp":
             # webapp <bot用户名> 直接打开 | webapp <群> <消息ID> 从按钮打开

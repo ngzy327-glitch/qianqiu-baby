@@ -6153,7 +6153,13 @@ _tg_lock = _threading.Lock()  # tg双号操作串行锁: daemon单线程处理+�
 
 # ==================== TG双号常驻进程(2026-09-08: 替代每次冷启动子进程) ====================
 _TG_DAEMON_PY = "/opt/deepseek-bot/tg_daemon.py"
+if not os.path.exists(_TG_DAEMON_PY):
+    # 非标准安装路径 → 回退到源码目录里的 tg_daemon.py(否则 daemon 永远起不来)
+    _TG_DAEMON_PY = str(Path(__file__).resolve().parent.parent / "tg_daemon.py")
 _TG_PY_PATH = "/opt/deepseek-bot/.venv/bin/python3"
+if not os.path.exists(_TG_PY_PATH):
+    # venv 缺失 → 用当前解释器兜底(同样防"daemon 启动失败")
+    _TG_PY_PATH = sys.executable
 _tg_srv = {"p": None, "req_id": 0}
 
 def _tg_daemon_start():

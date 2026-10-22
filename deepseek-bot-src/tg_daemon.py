@@ -18,7 +18,8 @@ import time
 
 LOG = "/opt/deepseek-bot/tg_daemon.log"
 
-sys.path.insert(0, "/opt/deepseek-bot")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # 优先同目录(自定义安装路径也能 import)
+sys.path.append("/opt/deepseek-bot")                            # 兼容旧安装路径兜底
 import tg_user  # 复用 ACCOUNTS / get_client / 全部 cmd_*
 
 
@@ -104,7 +105,8 @@ def _parse_args(act, args):
     if act == "buttons":
         return {"target": s(0, ""), "msg_id": n(1, 0)}
     if act == "webapp":
-        if len(args) > 1 and args[1] is not None:
+        # 修复: args[1] 为空串/None 时(如 tgt="acct1:@bot:") 曾误判成"从消息ID打开", 变成 ids=0 报消息不存在
+        if len(args) > 1 and str(args[1] if args[1] is not None else "").strip():
             return {"kwargs": (s(0, ""), n(1, 0))}
         return {"kwargs": (s(0, ""),)}
     if act == "bulkwebapp":
