@@ -1,0 +1,33 @@
+{
+ "name": "web_session",
+ "description": "多账号常驻网页会话: 每个账号独立浏览器 profile(Cookie/本地存储全保留)、独立指纹(UA/视口/时区/语言/WebGL)与独立代理出口。open 之后页面不关闭, 后续可以直接 see 看当前页面、click 点击、type 输入、scroll 滚动, 像人一样连续操作同一个登录态。适合签到/后台按钮/表单这类需要跨多轮对话连续操作的场景。写操作受每账号每分钟 10 次限流 + audit.log 审计。合规: 仅用于管理你自己拥有的账号与正常网页操作, 不用于绕过金融/支付/风控。",
+ "schema": {
+  "type": "object",
+  "properties": {
+   "act": {"type": "string", "enum": ["open", "see", "click", "type", "press", "scroll", "back", "reload", "wait", "tabs", "switch", "new_tab", "close_tab", "close", "list", "help"], "description": "open=打开并常驻 / see=看当前页 / click=点击 / type=输入 / press=按键 / scroll=滚动 / back / reload / wait / tabs / switch / close_tab / close(关该号浏览器, 登录态保留) / list"},
+   "account": {"type": "string", "description": "账号名(对应 accounts.json 的 key), 决定 profile 目录/指纹/代理"},
+   "url": {"type": "string", "description": "open/new_tab 的网址"},
+   "selector": {"type": "string", "description": "CSS 选择器, 如 #submit / input[name=q]; 也支持 Playwright 选择器(text=登录)"},
+   "text": {"type": "string", "description": "按可见文字定位元素, 比 selector 更抗改版"},
+   "placeholder": {"type": "string", "description": "按输入框 placeholder 定位"},
+   "value": {"type": "string", "description": "type 时要输入的内容"},
+   "enter": {"type": "boolean", "description": "type 后回车提交"},
+   "append": {"type": "boolean", "description": "逐字追加输入(模拟真人打字), 默认覆盖填充"},
+   "key": {"type": "string", "description": "press 的按键, 如 Enter/Escape/PageDown"},
+   "dy": {"type": "integer", "description": "scroll 纵向像素, 负值向上"},
+   "x": {"type": "number", "description": "click 的绝对坐标 x(和 y 一起用, 用于无选择器的元素)"},
+   "y": {"type": "number", "description": "click 的绝对坐标 y"},
+   "index": {"type": "integer", "description": "同名元素/标签的序号, 从 0 开始"},
+   "profile": {"type": "string", "description": "指纹模板名(browser_profiles.json), 不填用账号配置或 desktop_cn"},
+   "full": {"type": "boolean", "description": "see 时截整页"},
+   "chars": {"type": "integer", "description": "see 返回正文最大字数, 默认 4000"},
+   "wait": {"type": "integer", "description": "动作后等待毫秒数"},
+   "out": {"type": "string", "description": "see 截图保存路径, 默认 /tmp/web_账号.png"},
+   "timeout": {"type": "integer", "description": "超时秒数, 默认 45(页面)/15(元素)"}
+  },
+  "required": ["act"]
+ },
+ "exec": "/opt/deepseek-bot/knowledge/toolPlugins/web_session.py",
+ "admin_only": true,
+ "timeout": 200
+}

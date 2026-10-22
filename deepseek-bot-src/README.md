@@ -14,6 +14,7 @@ deepseek_bot/          主程序(引擎层 + 工具层 + 多AI编排)
   monitor.py           值守巡检
   miniapp_server.py    TG 小程序后端(管理面板)
 tg_daemon.py           多账号常驻服务(本地 socket, 避免 session 锁)
+web_session_daemon.py  多账号常驻网页会话(每号独立 profile/指纹/代理, 页面不关)
 tg_user.py             多账号操作
 grok_secrets.py        密钥脱敏
 assistant_api.py       OpenAI 兼容 API 服务(可选)
@@ -54,6 +55,14 @@ tg_user.py               ACCOUNTS 里的 "tg_id": None → 你的账号 TG ID
 - **自动回复**: 编辑 `autoreply.json`, 例: `[{"accounts":["ops"],"match":"在吗","reply":"在的~","scope":"private"}]`
 - **消息路由**: 编辑 `routes.json`, 例: `[{"accounts":["main"],"match":"下单","action":"notify"}]`(命中即通知你)
 - **看板**: miniapp 打开 `/accounts` 页——账号在线状态/指纹代理标记/待审批数/审计流水, 15s 自刷
+
+## 常驻网页会话(web_session)
+AI 可以按账号打开网页并**把页面留在后台**, 后续跨多轮对话继续点:
+- `open` 打开并常驻 → `see` 看当前页(截图+正文) → `click` 点击(text/selector/坐标) → `type` 输入 → `scroll/tabs/switch`
+- 每个账号一个独立浏览器 profile 目录(`web_profiles/<账号>/`): Cookie、localStorage、IndexedDB 全保留, 浏览器/服务重启后仍是登录态
+- 每号独立指纹(UA/视口/时区/语言/WebGL)+ 独立代理(`accounts.json` 的 `proxy`, 或 `web.profile` 指到 `browser_profiles.json` 模板)
+- 全程 `audit.log` 审计, 写操作每号每分钟 10 次上限
+- 启动: 插件会自动拉起 `web_session_daemon.py`; 也可 systemd 常驻。依赖: `pip install playwright && playwright install chromium`
 
 ## 按钮操作(识别 + 点击 bot 的 callback 按钮)
 AI 能读出消息上的按钮布局并按下指定按钮:

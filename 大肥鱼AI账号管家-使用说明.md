@@ -21,6 +21,7 @@
 | **自动化规则** | autoreply.json 关键词自动回复；routes.json 消息路由（命中即通知/转发） |
 | **效率工具** | 定时任务（cron）、值守盯梢、待办清单、持久目标 |
 | **信息处理** | 联网搜索、网页抓取/截图、RSS/YouTube 字幕、PDF、翻译、OCR |
+| **常驻网页会话** | 每号独立浏览器 profile/指纹/代理，打开后页面不关，AI 接着点（签到、后台按钮、表单） |
 | **视觉识别** | 图片理解、文字 OCR、自定义会员表情识别 |
 | **AI 编排** | 多 AI 协作（调研/文档/开发/运营/分析/汇总）、子代理、并行工作流 |
 | **管理面板** | miniapp 网页控制台 + `/accounts` 多账号看板（状态/审计流/待审批） |
@@ -97,7 +98,8 @@ assistant_api.py         _ADMINS = {None, None}     → _ADMINS = {你的TG_ID}
     "main": {
       "session": "/opt/deepseek-bot/sessions/main.session",
       "name": "主号", "phone": "+8613800000000", "username": "@your_account", "tg_id": 123456,
-      "device": {"device_model": "iPhone 15 Pro", "system_version": "iOS 17.5", "app_version": "10.9", "lang_code": "zh-hans"}
+      "device": {"device_model": "iPhone 15 Pro", "system_version": "iOS 17.5", "app_version": "10.9", "lang_code": "zh-hans"},
+      "web": {"profile": "desktop_cn"}
     },
     "ops": {
       "session": "/opt/deepseek-bot/sessions/ops.session",
@@ -135,11 +137,32 @@ mkdir -p sessions
 
 - `autoreply.json` — 自动回复：`[{"accounts":["ops"],"match":"在吗","reply":"在的~","scope":"private"}]`
 - `routes.json` — 消息路由：`[{"accounts":["main"],"match":"下单","action":"notify"}]`
-- `browser_profiles.json` — 网页指纹模板（web_visit 插件用）
+- `browser_profiles.json` — 网页指纹模板（web_visit / web_session 共用）
 
 ### 8. 看板
 
 miniapp 打开 `/accounts`：账号在线状态、指纹/代理标记、待审批数、审计流水，15 秒自动刷新。
+
+### 9. 常驻网页会话（web_session）
+
+每个账号一个独立浏览器（profile 目录 `web_profiles/<账号>/`，Cookie/localStorage/IndexedDB 全保留），页面打开后**不关**，AI 可以跨多轮对话接着操作。
+
+| 你说 | AI 会做 |
+|---|---|
+| 「用 ops 号打开 XX 后台，保持登录」 | `open` 打开页面并常驻（含验证码时可截图给你，你回验证码） |
+| 「现在页面上有哪些按钮？」 | `see` 截图 + 读正文，告诉你可点元素 |
+| 「点一下签到」 | `click`（优先按文字命中按钮/链接，返回实际点到的元素） |
+| 「在搜索框输入 XX 并回车」 | `type` + `enter` |
+| 「关掉 ops 的浏览器」 | `close`（只关进程，登录态仍保存在 profile 目录） |
+
+配置要点：
+
+- 指纹：`accounts.json` 里给账号加 `"web": {"profile": "desktop_cn"}`，模板在 `browser_profiles.json`（可加 `ua/viewport/screen/tz/lang/platform/hardware_concurrency/device_memory/webgl`）
+- 代理：账号级 `"proxy": {"type":"socks5","host":"...","port":1080}` 优先级最高，该号所有网页请求都从这条出口走
+- 依赖：`pip install playwright && playwright install chromium`（Linux 上还需 `playwright install-deps chromium`）
+- 常驻参数：`WEB_SESSION_MAX`（同时存活浏览器数，默认 5，超出按 LRU 关最久未用的）、`WEB_SESSION_IDLE`（空闲多少秒关浏览器，默认 1800，0=不关）；两者都只关进程，登录态不丢
+- 重置某号登录态：删掉 `web_profiles/<账号>/` 目录
+- daemon 日志：`web_session.log`；所有点击/输入都写 `audit.log`，写操作每号每分钟 10 次上限
 
 ---
 
