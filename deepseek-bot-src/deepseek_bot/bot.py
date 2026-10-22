@@ -13549,7 +13549,11 @@ async def main():
         if u not in OK:
             await e.reply(f"{_px('❌')} 仅管理员可用", parse_mode="HTML")
             return
-        await e.reply(f"{_px('🔎')} <b>凭据自检</b>\n<pre>{_hesc(_token_report())}</pre>"
+        try:
+            _rep = _token_report()
+        except Exception as _ex:
+            _rep = f"自检异常: {type(_ex).__name__}: {_ex}"
+        await e.reply(f"{_px('🔎')} <b>凭据自检</b>\n<pre>{_hesc(_rep)}</pre>"
                       f"\n<i>用法: /check 自检 · /balance 余额明细</i>", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:balance|余量|余额)\b\s*(raw)?"))
