@@ -10345,7 +10345,10 @@ def rt(n,a,chat_id=None,uid=None):
             _url=f"https://fofa.info/api/v1/search/all?email={_up.quote(_femail)}&key={_fkey}&qbase64={_qb64}&fields={_fields}&size={limit}&page=1"
             try:
                 import httpx as _hx2
-                _r2=_hx2.get(_url, timeout=30)
+                # Cloudflare 1010修复: 默认python UA会被拦截, 伪装浏览器UA
+                _r2=_hx2.get(_url, timeout=30, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                                                         "Accept": "application/json, text/plain, */*",
+                                                         "Accept-Language": "zh-CN,zh;q=0.9"})
                 _d=json.loads(_r2.text)
                 if _d.get("error"): return f"fofa err: {_d.get('errmsg') or _d['error']}"
                 _res=_d.get("results",[])
