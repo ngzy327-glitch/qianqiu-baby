@@ -3497,6 +3497,7 @@ TOOLS = [
  {"type":"function","function":{"name":"edit","description":"Replace text in file","parameters":{"type":"object","properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["path","old","new"]}}},
  {"type":"function","function":{"name":"search","description":"联网搜索(Bing+DDG+Marginalia+DDG库 四引擎并行, 结果按命中引擎数排序)。act=search 普通搜索(快, 2-5秒, 要最新资料/新闻/事实就用它); act=deep 深度检索(自动5路子查询+并行抓4-6篇正文全文, 5-10秒, 适合需要全面了解/对比/调研的问题)。多个不相关问题可就同一轮并行发多个 search。","parameters":{"type":"object","properties":{"q":{"type":"string","description":"搜索词或问题(中文英文都行; 支持 site: filetype: 等语法)"},"act":{"type":"string","description":"search=普通搜索(默认) | deep=深度检索(多路子查询+抓正文)"},"limit":{"type":"integer","description":"返回条数, 默认8"}},"required":["q"]}}},
  {"type":"function","function":{"name":"sys","description":"System:info/docker/svc/git/install","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"token","description":"凭据自检/余额(仅管理员): act=check 一把自检所有 token(TG bot token 走 getMe、DeepSeek key 余额、FOFA key、TG双号 session); act=balance 只看 DeepSeek 账户余额明细。用户问「余额/额度/还有多少钱/token 生效吗/自检一下/key 有没有效」时用它, 别用 sh 去 curl","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["check","balance"],"description":"check=全量自检(默认) | balance=余额明细"}},"required":["act"]}}},
  {"type":"function","function":{"name":"url","description":"网页/资源工具。act=dl【首选·下载视频音乐】yt-dlp(抖音/B站/油管/TikTok/音乐平台全支持, 纯音频加 audio=true 自动转mp3), 下完自动发给用户; act=download 普通直链(curl: 图片/zip/apk/文本); act=fetch 抓页面; act=extract 抽链接/邮箱/手机号/JS; act=post 带data发POST。下载需求一律用本工具, 不要用sh+curl手写。","parameters":{"type":"object","properties":{"url":{"type":"string"},"act":{"type":"string","description":"dl=流媒体下载(首选) | download=直链下载 | fetch=抓页面 | extract=抽信息 | post=POST"},"audio":{"type":"boolean","description":"act=dl 时 true=只提取音频转mp3(下音乐/歌曲必传)"},"name":{"type":"string","description":"act=dl/download 时的文件名(下音乐建议传「歌名-歌手」, 用户看到的文件名和播放器标题就是它; 不传则自动清洗平台标题)"},"cookie":{"type":"string"},"data":{"type":"string"},"name":{"type":"string"}},"required":["url"]}}},
  {"type":"function","function":{"name":"file","description":"文件收发: 小文本用name+text(≤3000字); 大文件/已有文件必须用 act=send + path=磁盘路径(机器直发,任意大小不截断,如/opt/deepseek-bot/xx.csv或/tmp/tg_file_xxx.txt)","parameters":{"type":"object","properties":{"name":{"type":"string"},"text":{"type":"string"},"act":{"type":"string","description":"send=发送已有磁盘文件(大文件必用)"},"path":{"type":"string","description":"要发送的磁盘文件绝对路径(act=send时填)"}},"required":["name"]}}},
  {"type":"function","function":{"name":"coin","description":"Crypto price","parameters":{"type":"object","properties":{"coin":{"type":"string"}},"required":["coin"]}}},
@@ -4368,6 +4369,7 @@ _NEED_MAP = {
     "shot": r'截图|screen|shot|网页截图',
     "pdf": r'pdf|PDF|生成pdf',
     "captcha": r'打码|captcha|验证码|capmonster',
+    "token": r'余额|额度|还有多少|token|自检|apikey|api key|key余额|key有效',
 }
 
 # 2026-09-14 管理员专属工具(挂载阶段就过滤掉, 免得普通用户的模型反复调用刷一屏 ❌)
@@ -4375,6 +4377,7 @@ _ADMIN_ONLY_TOOLS = {
     "sh", "sys", "write", "project", "playbook", "waf", "report", "schedule", "parse", "captcha",
     "data", "lateral", "privesc", "credential", "adaptive_chain", "api_attack", "c2", "cloud",
     "container", "evasion", "exfil", "tg", "memory", "conversation_search", "fofa", "selfext",
+    "token",
 }
 
 
@@ -8123,6 +8126,89 @@ def _key_balance(force=False):
         return False, f"查询失败({type(_be).__name__}: {str(_be)[:80]})", None
 
 
+def _mask_sec(_s, _keep=6):
+    """密钥脱敏: 只露前6后4, 绝不明文回显"""
+    _s = str(_s or "")
+    if not _s:
+        return "未配置"
+    return (_s[:_keep] + "…" + _s[-4:]) if len(_s) > _keep + 6 else "已配置"
+
+
+def _tg_bot_token_check():
+    """Bot API getMe: 验证 Telegram bot token 是否有效 → (ok, 说明)"""
+    import urllib.request as _ub
+    import urllib.error as _ue
+    try:
+        with _ub.urlopen(f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=15) as _r:
+            _d = json.loads(_r.read().decode("utf-8", "replace"))
+        if _d.get("ok"):
+            _b = _d.get("result") or {}
+            return True, f"@{_b.get('username')} id={_b.get('id')}"
+        return False, str(_d.get("description") or _d)[:120]
+    except _ue.HTTPError as _he:
+        try:
+            _bd = json.loads(_he.read().decode("utf-8", "replace"))
+        except Exception:
+            _bd = {}
+        return False, f"token 无效(HTTP {_he.code}: {_bd.get('description') or _he.reason})"
+    except Exception as _e:
+        return False, f"网络异常, 未能验证({type(_e).__name__}: {str(_e)[:70]})"
+
+
+def _fofa_key_check():
+    """FOFA key 自检(未配置则跳过) → 说明文本"""
+    _mail = os.getenv("FOFA_EMAIL", "")
+    _key = os.getenv("FOFA_API_KEY", "")
+    if not _mail or not _key:
+        return "未配置(跳过)"
+    import urllib.request as _ub
+    import urllib.error as _ue
+    from urllib.parse import quote as _q
+    try:
+        _u = f"https://fofa.info/api/v1/info/my?email={_q(_mail)}&key={_key}"
+        _rq = _ub.Request(_u, headers={"User-Agent": "Mozilla/5.0"})
+        with _ub.urlopen(_rq, timeout=15) as _r:
+            _d = json.loads(_r.read().decode("utf-8", "replace"))
+        if _d.get("error"):
+            return f"无效({_d.get('errmsg') or _d})"
+        return f"有效 F点={_d.get('fofa_point')} 查询余量={_d.get('remain_api_query')}"
+    except _ue.HTTPError as _he:
+        return f"key 无效(HTTP {_he.code})"
+    except Exception as _e:
+        return f"网络异常, 未能验证({type(_e).__name__})"
+
+
+def _balance_detail():
+    """DeepSeek 账户余额明细(强制刷新, 不吃 60 秒缓存)"""
+    _ok, _txt, _raw = _key_balance(force=True)
+    if not _raw:
+        return f"❌ DeepSeek 余额查询失败: {_txt}"
+    _lines = [f"DeepSeek 余额: {_txt}" + ("" if _ok else " (账户当前不可用)")]
+    for _i in (_raw.get("balance_infos") or []):
+        _lines.append(f"· {_i.get('currency')}: 总额 {_i.get('total_balance')} / "
+                      f"赠金 {_i.get('granted_balance')} / 充值 {_i.get('topped_up_balance')}")
+    return "\n".join(_lines)
+
+
+def _token_report():
+    """一键自检: TG bot token / DeepSeek key 余额 / FOFA key / TG 双号 session"""
+    _out = ["== 凭据自检 =="]
+    _ok1, _i1 = _tg_bot_token_check()
+    _out.append(f"[{'OK' if _ok1 else 'FAIL'}] TG Bot Token {_mask_sec(TOKEN, 10)}: {_i1}")
+    _ok2, _t2, _ = _key_balance(force=True)
+    _out.append(f"[{'OK' if _ok2 else 'FAIL'}] DeepSeek Key {_mask_sec(KEY)}: 余额 {_t2}")
+    _out.append(f"[INFO] FOFA Key {_mask_sec(os.getenv('FOFA_API_KEY', ''))}: {_fofa_key_check()}")
+    _sdir = os.getenv("TG_SESSION_DIR") or "/opt/deepseek-bot/sessions"
+    for _n in ("account1", "account2"):
+        _has = os.path.exists(f"{_sdir}/{_n}.session")
+        _out.append(f"[{'OK' if _has else 'WARN'}] TG {_n}: " + ("session 存在" if _has else "未登录"))
+    try:
+        _out.append(f"[INFO] 轻档 {_model_light()} / 攻坚 {MODEL_PRO} / 通道 {_prov_txt()}")
+    except Exception:
+        pass
+    return "\n".join(_out)
+
+
 def _usage_card(uid):
     """用量总览(给 /balance 用): key 余额 + 今日 token/条数 + 付费余额 + 模型档位"""
     try:
@@ -8610,6 +8696,12 @@ def rt(n,a,chat_id=None,uid=None):
             cm={"info":"free -h;echo ---;df -h /;echo ---;uptime","docker":f"docker {t} 2>&1|head -10","svc":f"systemctl {t} 2>&1|head -10","git":f"cd /opt&&git {t} 2>&1|head -10","install":f"apt-get install -y -qq {t} 2>&1|tail -5"}
             p=subprocess.run(cm.get(act,act),shell=True,capture_output=True,text=True,timeout=600,env=_proxy_env() or os.environ)
             return p.stdout[:3000] or p.stderr[:1000] or "Done"
+        if n=="token":
+            # 2026-10-22 老板「机器人自检token, 能询问机器人余额」: 凭据自检 + 余额查询
+            act=a.get("act","check")
+            if act=="balance":
+                return _balance_detail()
+            return _token_report()
         if n=="url":
             url=a.get('url','');act=a.get('act','fetch');cookie=a.get('cookie','');data=a.get('data','')
             if act=="fetch" or act=="":
@@ -11293,6 +11385,7 @@ async def main():
         BotCommand(command='rewind', description='⏪ 回滚上一次文件修改'),
         BotCommand(command='reboot', description='重启机器人'),
         BotCommand(command='stats', description='全局统计(用户/消息/历史)'),
+        BotCommand(command='check', description='🔎 凭据自检(token/余额/FOFA/双号)'),
     ]
     try:
         await client(SetBotCommandsRequest(scope=BotCommandScopeDefault(), lang_code='', commands=_CMD_COMMON))
@@ -13448,6 +13541,16 @@ async def main():
         await e.reply(f"{_px('⚡')} 预填充注入：<b>{_st}</b>{_extra}\n<i>用法: /prefill on|off</i>", parse_mode="HTML")
         try: _PF_F.write_text(json.dumps(_PREFILL_ON), encoding="utf-8")
         except: pass
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:check|selfcheck|token|自检)\b"))
+    async def _(e):
+        # 2026-10-22 老板「机器人自检token, 能询问机器人余额」: 一条命令看全所有凭据是否生效
+        u = e.sender_id
+        if u not in OK:
+            await e.reply(f"{_px('❌')} 仅管理员可用", parse_mode="HTML")
+            return
+        await e.reply(f"{_px('🔎')} <b>凭据自检</b>\n<pre>{_hesc(_token_report())}</pre>"
+                      f"\n<i>用法: /check 自检 · /balance 余额明细</i>", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(?:balance|余量|余额)\b\s*(raw)?"))
     async def _(e):
