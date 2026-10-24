@@ -10,7 +10,12 @@ import time
 import shutil
 from pathlib import Path
 
-VOICE_DIR = Path("/opt/deepseek-bot/voices")
+DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+VOICE_DIR = Path(DATA_DIR) / "voices"
 VOICE_DIR.mkdir(exist_ok=True)
 SAMPLE_DIR = VOICE_DIR / "samples"
 SAMPLE_DIR.mkdir(exist_ok=True)

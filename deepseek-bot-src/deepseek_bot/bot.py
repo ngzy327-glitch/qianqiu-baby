@@ -1257,11 +1257,18 @@ async def _api_call(_cfn, _retry=2):
                 if _code not in (400, 401, 403, 404, 408, 409, 429, 500, 502, 503, 504):
                     raise
                 await asyncio.sleep(1.5 * (_i+1))
-HF = Path("/opt/deepseek-bot/history.json")
-PF = Path("/opt/deepseek-bot/profiles.json")
+# 2026-10-25 数据目录可配置: DSB_DATA_DIR 环境变量覆盖默认 /opt/deepseek-bot
+#   用于把记忆/历史/配置存到用户指定文件夹(如同步到 iOS 的网盘目录)
+DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+HF = Path(DATA_DIR) / "history.json"
+PF = Path(DATA_DIR) / "profiles.json"
 try:  # 2026-09-05: 长会话提醒状态持久化(重启不丢, 不再每次重启复发)
     globals()['_clear_warned'] = {}
-    _cwf = Path("/opt/deepseek-bot/clear_warned.json")
+    _cwf = Path(DATA_DIR) / "clear_warned.json"
     if _cwf.exists():
         globals()['_clear_warned'].update(json.loads(_cwf.read_text(encoding="utf-8")))
 except Exception: pass
@@ -6423,11 +6430,12 @@ def _condense_history(_hk, _u, _chat_id):
         if _sum_txt:
             _out.append({"role": "system", "content": '【早前对话要点】' + _sum_txt})
         _final = _out + _mid_trim + _tail
-        # 预算闸: 全量模式放宽到 900k 字符, 压缩模式 600k
-        _budget = 900000 if _full else 600000
+        # 预算闸: 全量模式放宽到 1200k 字符, 压缩模式 600k
+        #   超预算时全量模式仍保留最近 400 条(不再砍到 120), 保证长对话不丢近期上下文
+        _budget = 1200000 if _full else 600000
         _ch = sum(len(str(_x.get("content", ""))) for _x in _final)
         if _ch > _budget:
-            _final = _final[-120:] if _full else _final[-80:]
+            _final = _final[-400:] if _full else _final[-80:]
             _ch2 = sum(len(str(_x.get("content", ""))) for _x in _final)
             print(f"[ctx] 预算闸: {_ch}字符 -> {len(_final)}条 {_ch2}字符", flush=True)
         return _final
@@ -7196,7 +7204,7 @@ async def _send_gate():
 
 # === 情绪拟人: 每用户心情值(-5..+5), 随交互变化, 随时间归零, 存盘重启不丢 ===
 _mood = {}
-_MOOD_F = Path("/opt/deepseek-bot/moods.json")
+_MOOD_F = Path(DATA_DIR) / "moods.json"
 try:
     if _MOOD_F.exists():
         _mood.update({int(k):v for k,v in json.loads(_MOOD_F.read_text(encoding="utf-8")).items()})
@@ -9583,7 +9591,7 @@ def rt(n,a,chat_id=None,uid=None):
                 # 无key → 提示AI生成摘要
                 return "📝 请在回复中基于现有记忆为用户生成一段简洁的摘要，然后调用 memory act=summarize key=摘要内容"
             if act=="clear":
-                try: os.remove(f"/opt/deepseek-bot/memories/u{uid}.json")
+                try: os.remove(f"{DATA_DIR}/memories/u{uid}.json")
                 except: pass
                 return "✅ 记忆已清除"
             return "memory: add|search|stats|pref|summarize|clear"
@@ -9817,7 +9825,7 @@ def rt(n,a,chat_id=None,uid=None):
             try:
                 if act=="list":
                     from pathlib import Path as _pl
-                    _d=_pl("/opt/deepseek-bot/knowledge/self_learned")
+                    _d=_pl(f"{DATA_DIR}/knowledge/self_learned")
                     if not _d.exists(): return "暂无自学记录"
                     files=sorted(_d.glob("*.md"),key=lambda f:-f.stat().st_mtime)
                     lines=[f"- {f.name} ({f.stat().st_size}字节)" for f in files[:30]]
@@ -9832,7 +9840,7 @@ def rt(n,a,chat_id=None,uid=None):
                     _blob="\n".join(_texts)
                     if len(_blob)<50: return "对话太短,无可学习内容"
                     import time as _lt
-                    _fn=_pl("/opt/deepseek-bot/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-chat-learn-{int(_lt.time())}.md"
+                    _fn=_pl(f"{DATA_DIR}/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-chat-learn-{int(_lt.time())}.md"
                     # 抽取关键词做 TRIGGER
                     import re as _re_l
                     _kws=set(_re_l.findall(r'[\u4e00-\u9fff]{2,6}',_blob))
@@ -9844,12 +9852,12 @@ def rt(n,a,chat_id=None,uid=None):
                     if not q: return "需要 q=主题关键词"
                     # 让模型自己用 search 工具调研后写知识, 这里只创建骨架文件
                     import time as _lt
-                    _fn=_pl("/opt/deepseek-bot/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-topic-{q[:20].replace(' ','_')}.md"
+                    _fn=_pl(f"{DATA_DIR}/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-topic-{q[:20].replace(' ','_')}.md"
                     _fn.write_text(f"<!-- TRIGGER: {q} -->\n# 主题学习: {q}\n\n(待调研填充 — 请用 search 工具调研后用 write/edit 补充内容)\n",encoding="utf-8")
                     return f"📝 已创建主题学习骨架: {_fn.name}\n请用 search 工具调研「{q}」,再用 write/edit 把内容写进该文件。"
                 if act=="clear":
                     from pathlib import Path as _pl2
-                    _d=_pl2("/opt/deepseek-bot/knowledge/self_learned")
+                    _d=_pl2(f"{DATA_DIR}/knowledge/self_learned")
                     _n=0
                     if _d.exists():
                         for _f in _d.glob("*.md"):
@@ -11239,9 +11247,11 @@ def lh():
             # 兼容旧格式(纯uid)和新格式(uid:chatid)
             try: d[int(k)]=v
             except: d[k]=v
-        # 历史清理: 每会话保留最近 MH 条（防膨胀）
+        # 历史清理: 压缩模式每会话保留最近 MH 条; 全量记忆模式不截断(用户要"记忆所有聊天")
         for k,v in d.items():
-            if len(v)>MH: d[k]=v[-MH:]
+            _uid_num = int(str(k).split(":")[0])
+            if (not _full_mem(_uid_num)) and len(v)>MH:
+                d[k]=v[-MH:]
         return d
     except: return {}
 # ==================== 思考落盘引擎 ====================
@@ -16798,7 +16808,7 @@ async def main():
                         import time as _lt_t
                         _facts = load_memories(u).get("facts", [])[-15:]
                         if _facts:
-                            _fdir = _pl_learn("/opt/deepseek-bot/knowledge/self_learned")
+                            _fdir = _pl_learn(f"{DATA_DIR}/knowledge/self_learned")
                             _fdir.mkdir(exist_ok=True)
                             _ftexts = "; ".join((f.get("text","") if isinstance(f,dict) else str(f)) for f in _facts)
                             _kw = "|".join(set(re.findall(r'[\u4e00-\u9fff]{2,6}', _ftexts))[:8]) or "自动学习"

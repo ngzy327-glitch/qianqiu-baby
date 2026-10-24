@@ -26,9 +26,14 @@ if JIEBA_OK:
     for word in ["挂机", "盈利", "提现", "吃肉", "得吃", "流水", "通宵", "熬夜", "凌晨", "不睡觉", "两天", "三天", "USDT", "OKPay", "起床", "睡觉"]:
         jieba.add_word(word)
 
-MEM_DIR = Path("/opt/deepseek-bot/memories")
+DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+MEM_DIR = Path(DATA_DIR) / "memories"
 MEM_DIR.mkdir(exist_ok=True)
-SEARCH_INDEX_DIR = Path("/opt/deepseek-bot/search_index")
+SEARCH_INDEX_DIR = Path(DATA_DIR) / "search_index"
 SEARCH_INDEX_DIR.mkdir(exist_ok=True)
 
 MAX_MEMORIES = 80       # 每人最多80条记忆
@@ -217,7 +222,7 @@ def _extract_keywords(text: str) -> list:
     return result[:15]
 
 # ==================== v3.2 语义向量记忆(Qwen embedding) ====================
-_VEC_DIR = Path("/opt/deepseek-bot/memories_vec")
+_VEC_DIR = Path(DATA_DIR) / "memories_vec"
 _VEC_DIR.mkdir(exist_ok=True)
 _EMBED_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
 _EMBED_MODEL = "text-embedding-v3"
@@ -423,7 +428,7 @@ def get_memory_stats(uid: int) -> str:
 
 def _get_history():
     """读取历史文件"""
-    HF = Path("/opt/deepseek-bot/history.json")
+    HF = Path(DATA_DIR) / "history.json"
     if not HF.exists():
         return {}
     try:

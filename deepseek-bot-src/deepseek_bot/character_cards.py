@@ -1,13 +1,18 @@
 """
 角色卡系统 — 定义/切换 AI 性格与人格
 每个角色卡包含: 名字、头像emoji、性格、背景、说话风格、价值观、开场白
-存储: /opt/deepseek-bot/character_cards.json (全局卡库)
+存储: {DSB_DATA_DIR}/character_cards.json (全局卡库, 默认 /opt/deepseek-bot)
 用户激活选择: 存在 profiles.json 的 _pcache[uid]['character'] = card_id
 """
 import json, os, time, uuid
 from pathlib import Path
 
-CARD_FILE = Path("/opt/deepseek-bot/character_cards.json")
+DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+CARD_FILE = Path(DATA_DIR) / "character_cards.json"
 
 # 默认卡 = 当前「大肥鱼」persona（保证向后兼容）
 DEFAULT_CARD = {
