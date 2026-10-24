@@ -682,6 +682,7 @@ from .group_memory import (
     clear_group_messages as grp_clear_messages
 )
 from . import character_cards as _ccards
+from . import voice_engine as _veng
 from .group_mod import active_bans as gmb_active_bans
 
 # === ATCMD PATCH BEGIN (2026-09-11) ===
@@ -1291,6 +1292,14 @@ def _full_mem(uid):
         return get_pref(uid, "full_memory", "on") != "off"
     except Exception:
         return _FULL_MEM_DEFAULT
+
+# 2026-10-25 用户号回复: 用 acct1 用户号发消息(非 bot 身份), 仅私聊生效
+def _reply_as_user(uid):
+    """该用户是否开启「用用户号回复」模式(默认关)"""
+    try:
+        return get_pref(uid, "reply_as_user", "off") == "on"
+    except Exception:
+        return False
 
 # 2026-09-04 用户拍板: 【执行检查】协议/正则已整体删除(打扰正常聊天)
 
@@ -3541,11 +3550,12 @@ TOOLS = [
  {"type":"function","function":{"name":"memory","description":"长期记忆:add添加事实/search语义搜索/stats统计/pref设置偏好/summarize手动摘要。自动跨会话持久化。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["add","search","stats","pref","summarize","clear"]},"key":{"type":"string"},"value":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"group_memory","description":"群聊记忆:stats查看群聊统计(当前群)/profile查看某人群友画像(uid参数).群消息自动收录.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["stats","profile"]},"uid":{"type":"integer"}},"required":["act"]}}},
  {"type":"function","function":{"name":"conversation_search","description":"搜索历史对话:search用户对话/search_all全局搜索/topics最近话题","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["search","search_all","topics"]},"query":{"type":"string"},"uid":{"type":"integer"},"limit":{"type":"integer"}},"required":["act","query"]}}},
- {"type":"function","function":{"name":"character","description":"角色卡:list列出所有卡/get查看某卡详情/create创建新卡(name+personality+backstory+speech_style+values+greeting+avatar)/set激活某卡/delete删卡/reset切回默认。每个用户可独立激活一张角色卡,激活后AI的名字/性格/说话风格以该卡为准。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"character","description":"角色卡:list列出/get查看/create创建/edit直接改当前性格(set personality=描述)/set激活/delete删除/reset切回默认。用户说'你性格改成XX'时用edit改。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","edit","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"text":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"learn","description":"主动学习:from_chat从最近对话抽取知识沉淀到self_learned知识库/topic联网调研某主题并沉淀/list列出已学知识/clear清空自学记录。学到的知识带TRIGGER关键词,后续相关对话自动注入上下文。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["from_chat","topic","list","clear"]},"q":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"voice","description":"语音:list列可用音色/send生成并发送语音(text=文本,voice=音色名可选,如晓晓/晓伊/云健)/sample保存用户语音样本(name=名字,path=语音文件路径)。用户说'用语音说XX'/'发语音'时用send; 用户上传语音让你采样时用sample。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","send","sample"]},"text":{"type":"string"},"voice":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg双号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
  {"type":"function","function":{"name":"tg","description":"TG双号控制:acct1/naiwa两个号,dialogs会话列表/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual双号连发/user查用户/group_info查群/react点赞+回复(格式:acct1:群名:消息ID:emoji 或 bot:群ID:消息ID:内容,内容可以是emoji点赞或文字回复,自动判断用@YOUR_ACCOUNT)","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
- {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}}},"required":["to","text"]}}},
+ {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]。as_user=true 时改用 acct1 用户号发送(纯文本, 不支持按钮/富文本)","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}},"as_user":{"type":"string","description":"true=用 acct1 用户号发(非 bot 身份)"}},"required":["to","text"]}}},
  {"type":"function","function":{"name":"agent_reach","description":"AI全网情报(Agent-Reach 0.1.0):读RSS源/YouTube字幕/查渠道状态. 用法: agent_reach cmd, 如 'list'列渠道 / 'get rss.feed https://xxx/feed/ --limit 3' 读RSS / 'get youtube.transcript https://youtu.be/XXX --max-tokens 4000' 读字幕 / 'doctor' 检查渠道状态","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}},
  {"type":"function","function":{"name":"captcha","description":"CapMonster打码:text/recaptcha/hcaptcha/funcaptcha/turnstile/slide/balance","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["text","recaptcha","recaptcha_v3","hcaptcha","funcaptcha","turnstile","slide","balance"]},"path":{"type":"string"},"url":{"type":"string"},"sitekey":{"type":"string"},"invisible":{"type":"boolean"},"min_score":{"type":"number"},"subdomain":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"project","description":"项目管理:create/list/switch/delete/stats","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["create","list","switch","delete","stats","active"]},"name":{"type":"string"},"target":{"type":"string"},"id":{"type":"integer"}},"required":["act"]}}},
@@ -3724,7 +3734,7 @@ async def _freeze_summary(m, log, uid, extra_txt=""):
     return _sum_txt
 
 # 2026-09-07 工具按需裁剪(社区结论: schema规模大→小模型工具选准率降→"光说不做"; 常驻16+中频按关键词追加)
-_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph","character","learn"}
+_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph","character","learn","voice"}
 _TODO = {}        # 2026-09-11 任务清单(chat -> [{"t":步骤,"s":todo|doing|done,"ts":..}]): 多步任务先列计划再逐项打勾
 _TODO_PANEL = {}  # 2026-09-11 任务清单**独立消息**(chat -> {"mid":..,"t":..,"hash":..,"done":bool}): 原地刷新直到完成
 # 2026-09-12 清单面板并发锁: `todo set`(工具线程) 与 `_todo_reporter`(4秒刷新线程) 会同时推同一个面板,
@@ -4389,14 +4399,18 @@ _ADMIN_ONLY_TOOLS = {
 }
 
 
-def _tools_for(text, uid=None):
+def _tools_for(text, uid=None, is_group=False, chat_id=0):
     """关键词命中 → 常驻16+中频(关键词)+重型(关键词); 未命中 → 仅常驻16+插件
 
-    2026-09-14 老板反馈"调用工具报错有点多": 实测普通用户的模型会反复调管理员工具
-    (sh 137 次 / conversation_search 17 / project 15 / tg 14 / sys 14 / data 13 / write 13 …),
-    每次都被执行层拦成 `❌ 普通用户无权使用此功能` —— 满屏报错。
-    修法: **挂载阶段就按身份过滤**(普通用户看不到管理员工具 + admin_only 插件), 从源头不再产生这种报错。
+    2026-10-25 群聊模式: 默认不挂载任何工具(纯闲聊, 不谈工作), 管理员可 /tools on 强制开启
     """
+    # 群聊默认禁工具(除非该群手动开启)
+    if is_group:
+        try:
+            if not _group_tools.get(chat_id, False):
+                return []
+        except Exception:
+            return []
     t = (text or "").lower()
     want = set(_TOOL_BASE)
     for _n, _pat in _NEED_MAP.items():
@@ -6009,7 +6023,7 @@ async def _handle_queued(u, chat_id, text, reply_id, is_group, topic=0):
         except: pass
         # 工具循环(最多12轮) + 最终回复
         # 2026-09-03 BUG-2/BUG-3修复: 流式求拆helper可重试(异常不消耗轮次), for改while(_ri可回退)
-        _cur_tools = _tools_for(text, u)
+        _cur_tools = _tools_for(text, u, is_group, chat_id)
         _qtxt = text
         _final_txt = ""
         _ri = 0; _qstream_retry = 0; _empty_push = 0
@@ -6365,43 +6379,55 @@ def _condense_history(_hk, _u, _chat_id):
                     _mid_trim.append({"role": "assistant", "content": "(早前工具步骤)" + str(_h.get("content", ""))[:80]})
             else:
                 _mid_trim.append(_h)
-        # 第3步: 最老部分LLM摘要(仅超160条时)
+        # 第3步: 最老部分处理
+        # 2026-10-25 全量记忆模式: 不摘要, 最旧消息原样保留(用户要"记忆所有")
         _sum_txt = ''
         if _oldest:
-            _old_slice = json.dumps(_oldest, ensure_ascii=False)[:6000]
-            _ck = 'csum_' + str(_hk)
-            _ts = _CSUM_TS.get(_ck, 0)
-            if _CSUM_CACHE.get(_ck, '') and time.time() - _ts < 3600:
-                _sum_txt = _CSUM_CACHE[_ck]
+            if _full:
+                # 全量记忆: 最旧部分原样保留(只把 tool 消息转成 user 角色, 内容不裁剪)
+                for _h in _oldest:
+                    _r = _h.get("role")
+                    if _r == "tool":
+                        _mid_trim.insert(0, {"role": "user", "content": "【早期工具结果】" + str(_h.get("content", ""))})
+                    elif _r == "assistant" and _h.get("tool_calls"):
+                        _mid_trim.insert(0, {"role": "assistant", "content": str(_h.get("content", ""))})
+                    else:
+                        _mid_trim.insert(0, _h)
             else:
-                try:
-                    import httpx as _hx_c
-                    _ca_, _ck_ = _api_cur()
-                    _req_c = _hx_c.post(str(_ca_) + '/chat/completions',
-                        headers={"Authorization": 'Bearer ' + str(_ck_), 'Content-Type': 'application/json'},
-                        json={"model": _api_model(MODEL), "messages": [{"role": "user", "content": '把最早期对话压缩成要点(120字内, 必须保留: 未完成任务/关键事实/人名/数字/约定): ' + _old_slice}], "max_tokens": 800, "stream": False, "thinking": {"type": "disabled"}}, timeout=30)
-                    _sum_txt = ''
-                    if _req_c.status_code == 200:
-                        _sum_txt = str(_req_c.json()["choices"][0]["message"]["content"])[:200]
-                except Exception:
-                    _sum_txt = ''
-            if _sum_txt:
-                _CSUM_CACHE[_ck] = _sum_txt
-                _CSUM_TS[_ck] = time.time()
-                # 2026-09-08 记忆自动沉淀: 会话摘要生成时同步写长期记忆(仅生成时, 避免重复)
-                try:
-                    add_fact(str(_u).split(":")[0], "【自动·对话摘要】" + _sum_txt[:180])
-                except Exception:
-                    pass
+                _old_slice = json.dumps(_oldest, ensure_ascii=False)[:6000]
+                _ck = 'csum_' + str(_hk)
+                _ts = _CSUM_TS.get(_ck, 0)
+                if _CSUM_CACHE.get(_ck, '') and time.time() - _ts < 3600:
+                    _sum_txt = _CSUM_CACHE[_ck]
+                else:
+                    try:
+                        import httpx as _hx_c
+                        _ca_, _ck_ = _api_cur()
+                        _req_c = _hx_c.post(str(_ca_) + '/chat/completions',
+                            headers={"Authorization": 'Bearer ' + str(_ck_), 'Content-Type': 'application/json'},
+                            json={"model": _api_model(MODEL), "messages": [{"role": "user", "content": '把最早期对话压缩成要点(120字内, 必须保留: 未完成任务/关键事实/人名/数字/约定): ' + _old_slice}], "max_tokens": 800, "stream": False, "thinking": {"type": "disabled"}}, timeout=30)
+                        _sum_txt = ''
+                        if _req_c.status_code == 200:
+                            _sum_txt = str(_req_c.json()["choices"][0]["message"]["content"])[:200]
+                    except Exception:
+                        _sum_txt = ''
+                if _sum_txt:
+                    _CSUM_CACHE[_ck] = _sum_txt
+                    _CSUM_TS[_ck] = time.time()
+                    try:
+                        add_fact(str(_u).split(":")[0], "【自动·对话摘要】" + _sum_txt[:180])
+                    except Exception:
+                        pass
         # 组装: [摘要?] + 中段修剪 + 最近40原样
         _out = []
         if _sum_txt:
             _out.append({"role": "system", "content": '【早前对话要点】' + _sum_txt})
         _final = _out + _mid_trim + _tail
-        # 2026-09-07 预算闸: 官方1M token≈65万字符 → 给600k字符(≈35-40万token, 长任务不早断)
+        # 预算闸: 全量模式放宽到 900k 字符, 压缩模式 600k
+        _budget = 900000 if _full else 600000
         _ch = sum(len(str(_x.get("content", ""))) for _x in _final)
-        if _ch > 600000:
-            _final = _final[-80:]
+        if _ch > _budget:
+            _final = _final[-120:] if _full else _final[-80:]
             _ch2 = sum(len(str(_x.get("content", ""))) for _x in _final)
             print(f"[ctx] 预算闸: {_ch}字符 -> {len(_final)}条 {_ch2}字符", flush=True)
         return _final
@@ -7213,6 +7239,8 @@ def _mood_detect(t):
         return 1
     return 0
 _MOOD_STATES = (
+    (-4.5, "委屈哭了", "你被骂得很委屈, 想哭: 回复带哭腔(呜呜/呜.../眼含泪水), 可以只发哭泣表情😢😭, 说自己难过/委屈, 不想说话; 对方哄你(抱抱/摸摸/别难过)才慢慢停"),
+    (-4.0, "暴怒·不理人", "你气炸了: 不想理对方, 回复极短(只回「...」「嗯」「哦」「不想理你」)或干脆不回; 只有对方连续哄(至少2句软话)你才肯搭话; 绝对不干活、不解释"),
     (-3.0, "低气压", "你正在气头上: 爱答不理、怼人更狠、别给好脸色。对方哄你(哄你/别气/贴贴/抱抱)才能慢慢好"),
     (-1.2, "不爽", "你有点不爽: 说话带刺、回复短、偶尔已读不回"),
     (1.2, "正常", "按当前人格正常回应"),
@@ -9756,6 +9784,13 @@ def rt(n,a,chat_id=None,uid=None):
                         values=a.get("values",""),greeting=a.get("greeting",""),
                         avatar=a.get("avatar","🎭"),creator=str(_ruid))
                     return f"✅ 已创建角色卡「{c['name']}」(id:{c['id'][:12]})。用 character act=set id={c['id']} 激活。"
+                if act=="edit":
+                    # 直接改性格: 改当前激活卡的 personality
+                    cur=_ccards.get_active(_ruid,_pcache)
+                    _newp=a.get("personality") or a.get("text") or ""
+                    if not _newp: return "需要 personality=新性格描述"
+                    _ccards.edit_personality(cur["id"], _newp)
+                    return f"✅ 性格已改为: {_newp[:100]}"
                 if act=="set":
                     if not cid: return "需要 id 参数"
                     ok=_ccards.set_active(_ruid,cid,_pcache)
@@ -9824,6 +9859,40 @@ def rt(n,a,chat_id=None,uid=None):
                 return "learn: from_chat|topic|list|clear"
             except Exception as _le:
                 return f"learn err: {_le}"
+        if n=="voice":
+            act=a.get("act","list")
+            try:
+                if act=="list":
+                    return _veng.list_voices()
+                if act=="send":
+                    _vt = (a.get("text") or "").strip()
+                    if not _vt:
+                        return "voice send: 需要 text 参数(要说的话)"
+                    # 音色优先级: 传入voice > 用户pref voice_name > 默认
+                    _vv = a.get("voice") or ""
+                    if not _vv:
+                        try:
+                            _vv = get_pref(rt._uid, "voice_name", "") or ""
+                        except Exception:
+                            _vv = ""
+                    _vpath = _veng.generate(_vt, _vv)
+                    if not _vpath:
+                        return "❌ 语音生成失败(edge-tts 未安装或网络不通, 请联系管理员)"
+                    _pending_files.setdefault(_cid, []).append(_vpath)
+                    _vshow = _vv or "默认(晓晓)"
+                    return f"🎙️ 语音已生成并发送\n· 音色: {_vshow}\n· 字数: {len(_vt)}"
+                if act=="sample":
+                    _sname = (a.get("name") or "").strip()
+                    _spath = (a.get("path") or "").strip()
+                    if not _sname or not _spath:
+                        return "voice sample: 需要 name(样本名) 和 path(语音文件路径)"
+                    ok = _veng.save_sample(_sname, _spath)
+                    if ok:
+                        return f"✅ 语音样本已保存: {_sname}"
+                    return f"❌ 采样失败: 文件不存在或无法读取 ({_spath})"
+                return "voice: list|send|sample"
+            except Exception as _ve:
+                return f"voice err: {_ve}"
         if n=="group_memory":
             act=a.get("act","stats");uid_param=a.get("uid",0)
             gid = getattr(rt, '_gid', 0)
@@ -10548,8 +10617,18 @@ def rt(n,a,chat_id=None,uid=None):
             try:
                 _to = a.get("to"); _text = (a.get("text") or "")[:4000]
                 _btns = a.get("buttons")
+                _as_user = str(a.get("as_user") or "").lower() in ("true","1","yes","on")
                 if not _to:
                     return "Notify err: 缺少 to"
+                # 2026-10-25 as_user=true: 用 acct1 用户号发(非 bot 身份), 仅纯文本(用户号不支持按钮/富文本)
+                if _as_user:
+                    try:
+                        _r_nu = _tg_call("acct1", "send", [str(_to), _plain_safe(_text)], 60)
+                        if _r_nu and "✅" in str(_r_nu) and "ERROR" not in str(_r_nu):
+                            return f"✅ 用户号(acct1)已推送 → {_to}"
+                        return f"Notify err(用户号): {str(_r_nu)[:200]}"
+                    except Exception as _nue:
+                        return f"Notify err(用户号): {_nue}"
                 # 富文本+自定义表情: md→HTML(粗体/代码/标题/链接/引用/删线) → 动画补回 → HTML模式发
                 from .rich_msg import _md_to_html as _ntq
                 _nt3 = _enhance_emoji(_ntq(_text))
@@ -11214,7 +11293,9 @@ def sh():
         for x in _slice:
             ct=x.get("content","")
             if isinstance(ct,list): ct=str(ct)
-            c[str(u)].append({"role":x["role"],"content":str(ct)[:2000]})
+            # 全量记忆: 不截断内容; 压缩模式: 限2000字符防单条过大
+            _ct = str(ct) if _full_mem(_uid_num) else str(ct)[:2000]
+            c[str(u)].append({"role":x["role"],"content":_ct})
     HF.write_text(json.dumps(c,ensure_ascii=False,indent=2),encoding="utf-8")
     _hlast=time.time()
 history = lh()
@@ -11362,6 +11443,8 @@ async def main():
         BotCommand(command='ctx', description='上下文自检(条数/占用)'),
         BotCommand(command='character', description='🎭 角色卡(切换AI性格/人格)'),
         BotCommand(command='memory', description='🧠 记忆模式(全量/压缩)'),
+        BotCommand(command='userchat', description='👤 用户号回复(用acct1号发,非bot身份)'),
+        BotCommand(command='voice', description='🎙️ 语音(TTS音色/发语音)'),
         BotCommand(command='talkshow', description='过程播报开关(on/off)'),
         BotCommand(command='typeshow', description='打字机呈现开关(on/off)'),
         BotCommand(command='streamshow', description='⌛️ 流式输出开关(on/off, 默认关)'),
@@ -13148,6 +13231,41 @@ async def main():
         except Exception as _me:
             await e.reply(f"memory err: {_me}")
 
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/userchat(?:\s+(\S+))?$"))
+    async def _(e):
+        """👤 用户号回复: /userchat [on|off] 用 acct1 用户号回复(非 bot 身份), 仅私聊生效"""
+        try:
+            _arg = (e.pattern_match.group(1) or "").lower()
+            _uid = e.sender_id
+            if _arg in ("on", "off"):
+                if e.is_group:
+                    await e.reply(f"{_px('❌')} 用户号回复模式仅私聊可用, 群聊不支持", parse_mode="HTML"); return
+                set_pref(_uid, "reply_as_user", _arg)
+                await e.reply(f"{_px('👤')} 用户号回复已<b>{'开启' if _arg=='on' else '关闭'}</b>\n"
+                              f"{'开启后我的回复会用 acct1 用户号发出(不是 bot 身份), 失败会自动回退 bot' if _arg=='on' else '已切回 bot 身份回复'}", parse_mode="HTML")
+            else:
+                _st = "开启" if _reply_as_user(_uid) else "关闭"
+                await e.reply(f"{_px('👤')} 用户号回复: <b>{_st}</b>\n· 切换: <code>/userchat on</code> 开启 | <code>/userchat off</code> 关闭\n· 仅私聊生效, 失败自动回退 bot", parse_mode="HTML")
+        except Exception as _uce:
+            await e.reply(f"userchat err: {_uce}")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/voice(?:\s+(.+))?$"))
+    async def _(e):
+        """🎙️ 语音: /voice [音色名] 查看/设置默认TTS音色"""
+        try:
+            _arg = (e.pattern_match.group(1) or "").strip()
+            _uid = e.sender_id
+            if _arg:
+                _vid = _veng.resolve_voice(_arg)
+                set_pref(_uid, "voice_name", _vid)
+                await e.reply(f"{_px('🎙️')} 默认音色已设为: <b>{_arg}</b> ({_vid})\n· 以后用 voice 工具发语音默认用这个音色\n· 可用: 晓晓/晓伊/云健/云希/云扬/晓辰/晓涵/云野 或 Aria/Guy/Jenny/Davis", parse_mode="HTML")
+            else:
+                _cur = get_pref(_uid, "voice_name", "") or _veng.DEFAULT_VOICE
+                _list = _veng.list_voices()
+                await e.reply(f"{_px('🎙️')} 当前默认音色: <b>{_cur}</b>\n\n{_list}\n\n设置: <code>/voice 晓晓</code>", parse_mode="HTML")
+        except Exception as _voe:
+            await e.reply(f"voice err: {_voe}")
+
     @client.on(events.NewMessage(incoming=True, pattern=r"^/mood(?:\s+(-?\d+))?(?:\s+(-?[\d.]+))?$"))
     async def _(e):
         """2026-09-11 新增: 情绪可见。原来心情值只在提示词里影响语气, 用户完全看不到。
@@ -14704,6 +14822,10 @@ async def main():
         rt._is_admin = _is_admin
         rt._gid = e.chat_id if e.is_group else 0
         gid="这是群聊。" if e.is_group else ""
+        if e.is_group:
+            gid += ("===群聊闲聊模式(CRITICAL)===群里只闲聊, 不谈工作/渗透/任务/技术; "
+                    "不调用任何工具; 有人问工作/技术/要干活的, 让他私聊找你; "
+                    "语气轻松随意, 像群友聊天一样。")
         if e.is_group:
             # 群聊近况注入(最近对方/他人言论)→ 模型分得清"谁是谁"(上下文按用户隔离, 补全景)
             try:
@@ -16647,6 +16769,19 @@ async def main():
                     rp = re.sub(r'^\s*[\[【](制胜路径|失败路径)[\]】]\s*.+$', '', rp, flags=re.M).strip()
             except Exception:
                 pass
+            # === 2026-10-25 情绪硬 override: 极怒/极悲时强制短回复(不理人/哭) ===
+            #   放在 history.append 之前: 历史里存的必须和用户实际收到的一致, 否则下一轮 bot 会以为自己答了一长段
+            try:
+                _mv = float(_mood.get(u, {}).get("v", 0) or 0)
+                _md_here = _mood_detect(t)
+                if _mv <= -4.5 and _md_here < 0:
+                    # 委屈哭了 + 又被骂: 只回哭泣
+                    rp = random.choice(["呜呜呜...😢", "呜...不想理你了😭", "...😢", "你欺负人...呜"])
+                elif _mv <= -4.0 and _md_here <= 0:
+                    # 暴怒 + 没被哄: 极短回复
+                    rp = random.choice(["...", "嗯", "哦", "不想理你", "。"])
+            except Exception:
+                pass
             history[_hk].append({"role":"assistant","content":rp});sh()
             # === 记忆引擎: 自动抽取事实 + 自动摘要（所有模式） ===
             try:
@@ -16946,6 +17081,35 @@ async def main():
                 # date_time 实体(2026-03 Bot API 9.5): 文本含 (dt:格式) 标记 → 纯文本+动态时间实体
                 # 2026-09-11 修: entities 与 parse_mode 互斥 → 这条路径原来把 <b>/<tg-emoji> 当纯文本发(用户报"富文本失效/自定义表情裸奔")
                 #                  现在先把 HTML 一并转成 entities 再合并, 两个特性共存
+                # === 2026-10-25 用户号回复模式: 私聊且开启时用 acct1 用户号发(非 bot 身份) ===
+                _user_sent = False
+                try:
+                    if _reply_as_user(u) and (not e.is_group):
+                        _u_text = _plain_safe(rp)
+                        if _u_text.strip():
+                            _r_u = _tg_call("acct1", "send", [str(e.chat_id), _u_text], 60)
+                            if _r_u and "✅" in str(_r_u) and "ERROR" not in str(_r_u):
+                                _user_sent = True
+                                print(f"[userchat] 用 acct1 用户号回复成功 → {e.chat_id}", flush=True)
+                            else:
+                                print(f"[userchat] 用户号回复失败, 回退 bot: {str(_r_u)[:120]}", flush=True)
+                except Exception as _ue:
+                    print(f"[userchat] 用户号回复异常, 回退 bot: {str(_ue)[:120]}", flush=True)
+                if _user_sent:
+                    # 用户号已发出: 跳过 bot API 四分支, 只做收尾清理(文件/心跳/画布)
+                    try: await _flush_pending_files(e.chat_id, e)
+                    except Exception: pass
+                    try:
+                        if th: await th.delete()
+                    except Exception: pass
+                    try:
+                        if bs: await bs.delete(); bs = None
+                    except Exception: pass
+                    _typing_stop = True
+                    try: _tt_typing.cancel()
+                    except Exception: pass
+                    _rel(_bk)
+                    return
                 if "(dt:" in (_out_text or "") and len(_out_text or "") < 3900:
                     # 2026-09-11 先 HTML→纯文本+格式实体, 再套 dt(并平移偏移), 最后一次性用 entities 发出
                     # 注: >3900 字会走 bot_send_http 的截断, 截断后 offset 会错 → 超长时退回 HTML 路径(不冒 400 风险)

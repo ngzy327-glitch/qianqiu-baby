@@ -112,6 +112,11 @@ def update_card(card_id: str, **fields) -> dict:
     return card
 
 
+def edit_personality(card_id: str, personality_text: str) -> dict:
+    """直接修改性格(便捷接口): 用一句话描述新性格, 覆盖 personality 字段"""
+    return update_card(card_id, personality=personality_text)
+
+
 def get_active(uid: int, pcache: dict) -> dict:
     """获取用户激活的角色卡（从 pcache 读，无则默认卡）"""
     try:
