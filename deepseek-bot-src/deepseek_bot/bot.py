@@ -14461,6 +14461,41 @@ async def main():
             except Exception as _ve:
                 print(f"[voice] 语音采样异常: {_ve}", flush=True)
                 t = "[语音消息]"
+        elif e.audio:
+            # 2026-10-25 音乐/音频文件: 同样采样保存(用于声纹克隆)
+            try:
+                _abytes = await client.download_media(e.message, file=bytes)
+                if _abytes:
+                    import tempfile
+                    _aext = ".mp3"
+                    _aname = getattr(e.audio, 'file_name', '') or ''
+                    if _aname and '.' in _aname:
+                        _aext = os.path.splitext(_aname)[1].lower()
+                    _atf = tempfile.NamedTemporaryFile(suffix=_aext, delete=False)
+                    _atf.write(_abytes); _atf.close()
+                    _sname = f"u{u}_{int(time.time())}"
+                    _aok = _veng.save_sample(_sname, _atf.name)
+                    try: os.unlink(_atf.name)
+                    except: pass
+                    if _aok:
+                        _adur = getattr(e.audio, 'duration', 0) or 0
+                        _atitle = getattr(e.audio, 'title', '') or ''
+                        _aperf = getattr(e.audio, 'performer', '') or ''
+                        _desc = f"{_aperf} - {_atitle}" if _atitle else "音频文件"
+                        t = f"[音频: 已采样保存(样本名:{_sname}, 时长:{_adur}s, {_desc})]"
+                        if not e.is_group:
+                            try:
+                                await e.reply(f"🎵 收到音频啦~ 已采样保存为 <code>{_sname}</code>\n"
+                                              f"· 用这个声音说话: 「用 {_sname} 的声音说你好」\n"
+                                              f"· 查看所有采样: <code>/voice samples</code>", parse_mode="HTML")
+                            except: pass
+                    else:
+                        t = "[音频文件]"
+                else:
+                    t = "[音频文件]"
+            except Exception as _ae:
+                print(f"[audio] 音频采样异常: {_ae}", flush=True)
+                t = "[音频文件]"
         elif e.document and getattr(e.message, 'sticker', None) is not None:
             # 贴纸(经document到达): 图片型(webp/png)→视觉识别(同以前能看到内容); 动态webm→名字+异步首帧
             # ⚠️ 变量用 _stkm: _stk 是主任务键(停止信号), 覆盖会导致 _stopped[_stk] TypeError (Document/hash 崩溃)
