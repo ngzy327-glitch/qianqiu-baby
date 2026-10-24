@@ -3559,7 +3559,7 @@ TOOLS = [
  {"type":"function","function":{"name":"conversation_search","description":"搜索历史对话:search用户对话/search_all全局搜索/topics最近话题","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["search","search_all","topics"]},"query":{"type":"string"},"uid":{"type":"integer"},"limit":{"type":"integer"}},"required":["act","query"]}}},
  {"type":"function","function":{"name":"character","description":"角色卡:list列出/get查看/create创建/edit直接改当前性格(set personality=描述)/set激活/delete删除/reset切回默认。用户说'你性格改成XX'时用edit改。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","edit","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"text":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"learn","description":"主动学习:from_chat从最近对话抽取知识沉淀到self_learned知识库/topic联网调研某主题并沉淀/list列出已学知识/clear清空自学记录。学到的知识带TRIGGER关键词,后续相关对话自动注入上下文。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["from_chat","topic","list","clear"]},"q":{"type":"string"}},"required":["act"]}}},
- {"type":"function","function":{"name":"voice","description":"语音:list列可用音色/send生成并发送语音(text=文本,voice=音色名可选,如晓晓/晓伊/云健)/sample保存用户语音样本(name=名字,path=语音文件路径)。用户说'用语音说XX'/'发语音'时用send; 用户上传语音让你采样时用sample。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","send","sample"]},"text":{"type":"string"},"voice":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"voice","description":"语音:list列可用音色/list_samples列已采样声音/send生成并发送语音(text=文本,voice=音色名如晓晓/晓伊/云健, rate=语速如+20%, pitch=音调如+10Hz)/sample保存用户语音样本(name=样本名,path=语音文件路径)/clone用已采样的声纹克隆说话(text=文本,sample=样本名,需安装CosyVoice)。用户说'用语音说XX'时用send; 用户发语音让你采样时用sample; 用户说'用我的声音说'时用clone。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","list_samples","send","sample","clone"]},"text":{"type":"string"},"voice":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"sample":{"type":"string"},"rate":{"type":"string"},"pitch":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg双号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
  {"type":"function","function":{"name":"tg","description":"TG双号控制:acct1/naiwa两个号,dialogs会话列表/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual双号连发/user查用户/group_info查群/react点赞+回复(格式:acct1:群名:消息ID:emoji 或 bot:群ID:消息ID:内容,内容可以是emoji点赞或文字回复,自动判断用@YOUR_ACCOUNT)","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
  {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]。as_user=true 时改用 acct1 用户号发送(纯文本, 不支持按钮/富文本)","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}},"as_user":{"type":"string","description":"true=用 acct1 用户号发(非 bot 身份)"}},"required":["to","text"]}}},
@@ -9872,6 +9872,8 @@ def rt(n,a,chat_id=None,uid=None):
             try:
                 if act=="list":
                     return _veng.list_voices()
+                if act=="list_samples":
+                    return _veng.list_samples_str()
                 if act=="send":
                     _vt = (a.get("text") or "").strip()
                     if not _vt:
@@ -9883,12 +9885,28 @@ def rt(n,a,chat_id=None,uid=None):
                             _vv = get_pref(rt._uid, "voice_name", "") or ""
                         except Exception:
                             _vv = ""
-                    _vpath = _veng.generate(_vt, _vv)
+                    # 语速/音调(可选, 让语音更拟人)
+                    _rate = a.get("rate") or "+0%"
+                    _pitch = a.get("pitch") or "+0Hz"
+                    _vpath = _veng.generate(_vt, _vv, rate=_rate, pitch=_pitch)
                     if not _vpath:
                         return "❌ 语音生成失败(edge-tts 未安装或网络不通, 请联系管理员)"
                     _pending_files.setdefault(_cid, []).append(_vpath)
                     _vshow = _vv or "默认(晓晓)"
-                    return f"🎙️ 语音已生成并发送\n· 音色: {_vshow}\n· 字数: {len(_vt)}"
+                    return f"🎙️ 语音已生成并发送\n· 音色: {_vshow}\n· 语速: {_rate} 音调: {_pitch}\n· 字数: {len(_vt)}"
+                if act=="clone":
+                    # 声纹克隆: 用已保存的语音样本复刻声音说话(需安装 CosyVoice)
+                    _ct = (a.get("text") or "").strip()
+                    _sname = (a.get("sample") or a.get("name") or "").strip()
+                    if not _ct:
+                        return "voice clone: 需要 text 参数"
+                    if not _sname:
+                        return "voice clone: 需要 sample 参数(样本名, 用 list_samples 查看)"
+                    _cpath = _veng.generate_with_clone(_ct, _sname)
+                    if not _cpath:
+                        return f"❌ 克隆失败: 样本不存在或 CosyVoice 未安装。状态: {_veng.cosyvoice_status()}"
+                    _pending_files.setdefault(_cid, []).append(_cpath)
+                    return f"🎭 声纹克隆语音已发送\n· 样本: {_sname}\n· 字数: {len(_ct)}"
                 if act=="sample":
                     _sname = (a.get("name") or "").strip()
                     _spath = (a.get("path") or "").strip()
@@ -9896,9 +9914,10 @@ def rt(n,a,chat_id=None,uid=None):
                         return "voice sample: 需要 name(样本名) 和 path(语音文件路径)"
                     ok = _veng.save_sample(_sname, _spath)
                     if ok:
-                        return f"✅ 语音样本已保存: {_sname}"
+                        _hint = "，可用于声纹克隆" if _veng._cosyvoice_available() else "，安装 CosyVoice 后可克隆"
+                        return f"✅ 语音样本已保存: {_sname}{_hint}\n用 voice act=clone sample={_sname} text=你要说的话 来复刻这个声音"
                     return f"❌ 采样失败: 文件不存在或无法读取 ({_spath})"
-                return "voice: list|send|sample"
+                return "voice: list|list_samples|send|clone|sample"
             except Exception as _ve:
                 return f"voice err: {_ve}"
         if n=="group_memory":
@@ -13261,18 +13280,35 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/voice(?:\s+(.+))?$"))
     async def _(e):
-        """🎙️ 语音: /voice [音色名] 查看/设置默认TTS音色"""
+        """🎙️ 语音: /voice [音色名|samples|clone] 查看/设置音色、查看采样、克隆状态"""
         try:
             _arg = (e.pattern_match.group(1) or "").strip()
             _uid = e.sender_id
+            if _arg == "samples":
+                await e.reply(f"{_px('🎙️')} {_veng.list_samples_str()}", parse_mode="HTML")
+                return
+            if _arg == "clone":
+                await e.reply(f"{_px('🎭')} 声纹克隆状态: {_veng.cosyvoice_status()}\n\n"
+                              f"用法:\n· 给我发一段语音(自动采样)\n· 然后说「用我的声音说你好」\n"
+                              f"· 或用工具 voice act=clone sample=样本名 text=文本", parse_mode="HTML")
+                return
             if _arg:
                 _vid = _veng.resolve_voice(_arg)
                 set_pref(_uid, "voice_name", _vid)
-                await e.reply(f"{_px('🎙️')} 默认音色已设为: <b>{_arg}</b> ({_vid})\n· 以后用 voice 工具发语音默认用这个音色\n· 可用: 晓晓/晓伊/云健/云希/云扬/晓辰/晓涵/云野 或 Aria/Guy/Jenny/Davis", parse_mode="HTML")
+                await e.reply(f"{_px('🎙️')} 默认音色已设为: <b>{_arg}</b> ({_vid})\n"
+                              f"· 以后用 voice 工具发语音默认用这个音色\n"
+                              f"· 可用: 晓晓/晓伊/云健/云希/云扬/晓辰/晓涵/云野 或 Aria/Guy/Jenny/Davis\n"
+                              f"· 查看采样: <code>/voice samples</code>\n"
+                              f"· 克隆状态: <code>/voice clone</code>", parse_mode="HTML")
             else:
                 _cur = get_pref(_uid, "voice_name", "") or _veng.DEFAULT_VOICE
                 _list = _veng.list_voices()
-                await e.reply(f"{_px('🎙️')} 当前默认音色: <b>{_cur}</b>\n\n{_list}\n\n设置: <code>/voice 晓晓</code>", parse_mode="HTML")
+                _cs = _veng.cosyvoice_status()
+                await e.reply(f"{_px('🎙️')} 当前默认音色: <b>{_cur}</b>\n"
+                              f"🎭 声纹克隆: {_cs}\n\n{_list}\n\n"
+                              f"设置音色: <code>/voice 晓晓</code>\n"
+                              f"查看采样: <code>/voice samples</code>\n"
+                              f"克隆状态: <code>/voice clone</code>", parse_mode="HTML")
         except Exception as _voe:
             await e.reply(f"voice err: {_voe}")
 
@@ -14394,6 +14430,36 @@ async def main():
                     _nm_g = str(_sname_g) if '_sname_g' in globals() else str(u)
                     grp_record(e.chat_id, u, _nm_g, f"[图片: {t[:200]}]")
                 except: pass
+        elif e.voice:
+            # 2026-10-25 语音消息: 私聊自动采样保存(用于声纹克隆/音色学习)
+            try:
+                _vbytes = await client.download_media(e.message, file=bytes)
+                if _vbytes:
+                    # 存到临时文件, 然后用 voice_engine 采样
+                    import tempfile
+                    _vtf = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+                    _vtf.write(_vbytes); _vtf.close()
+                    _sname = f"u{u}_{int(time.time())}"
+                    _vok = _veng.save_sample(_sname, _vtf.name)
+                    try: os.unlink(_vtf.name)
+                    except: pass
+                    if _vok:
+                        _vdur = getattr(e.voice, 'duration', 0) or 0
+                        t = f"[语音消息: 已自动采样保存(样本名:{_sname}, 时长:{_vdur}s)]"
+                        # 私聊额外提示用户怎么用
+                        if not e.is_group:
+                            try:
+                                await e.reply(f"🎙️ 收到你的语音啦~ 已采样保存为 <code>{_sname}</code>\n"
+                                              f"· 让我用你的声音说话: 「用我的声音说你好」\n"
+                                              f"· 查看所有采样: <code>/voice samples</code>", parse_mode="HTML")
+                            except: pass
+                    else:
+                        t = "[语音消息]"
+                else:
+                    t = "[语音消息]"
+            except Exception as _ve:
+                print(f"[voice] 语音采样异常: {_ve}", flush=True)
+                t = "[语音消息]"
         elif e.document and getattr(e.message, 'sticker', None) is not None:
             # 贴纸(经document到达): 图片型(webp/png)→视觉识别(同以前能看到内容); 动态webm→名字+异步首帧
             # ⚠️ 变量用 _stkm: _stk 是主任务键(停止信号), 覆盖会导致 _stopped[_stk] TypeError (Document/hash 崩溃)

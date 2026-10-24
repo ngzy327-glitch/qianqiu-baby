@@ -22,6 +22,8 @@ python-multipart>=0.0.9
 # faster-whisper>=1.0      # 本地语音识别
 # edge-tts>=7.0            # 语音合成(已启用: bot 语音功能)
 edge-tts>=7.0
+emoji>=2.0                 # emoji 清理(TTS 文本预处理, 可选, 不装也能用保守正则)
+# cosyvoice>=0.1           # 声纹克隆(可选, 需 torch+torchaudio, 用于 voice act=clone)
 # capmonster_python>=1.2   # CapMonster 打码(需自备 key)
 # ddddocr>=1.5             # 本地验证码识别
 # paddleocr>=2.7           # 本地 OCR(占用较大)
