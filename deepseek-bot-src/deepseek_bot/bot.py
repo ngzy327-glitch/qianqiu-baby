@@ -13987,6 +13987,15 @@ async def main():
         except Exception:
             print(f"[evt] 消息到达 {_evt_t0:.3f}", flush=True)
         if e.message.out: return  # 防止bot回复自己的消息
+        # 2026-10-25 PERSONA_LOAD 协议: 用户发【PERSONA_LOAD]开头的消息 → 确认人格已加载, 不进LLM
+        try:
+            _pl_txt = (e.raw_text or "").strip()
+            if _pl_txt.startswith("【PERSONA_LOAD]") or _pl_txt.startswith("[PERSONA_LOAD]"):
+                await e.reply("🐳 人格已加载: 鲸萝莉模式。主人，人家在呢~")
+                print(f"[persona] PERSONA_LOAD 协议已确认", flush=True)
+                return
+        except Exception:
+            pass
         # 2026-09-11 ask「✏️ 自己输入」: 上一步点了"自己说" → 这条文字就是答案(不再走 AI 流程)
         try:
             _atk = _ASK_TYPE.pop(str(e.chat_id), None)
