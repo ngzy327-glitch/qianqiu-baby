@@ -9878,7 +9878,7 @@ def rt(n,a,chat_id=None,uid=None):
                     _ccards.set_active(_ruid,"default_feiyu",_pcache)
                     try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
                     except Exception: pass
-                    return "✅ 已切回默认角色卡(大肥鱼)"
+                    return "✅ 已切回默认角色卡(鲸萝莉)"
                 if act=="delete":
                     if not cid: return "需要 id 参数"
                     ok=_ccards.delete_card(cid)
@@ -13300,7 +13300,7 @@ async def main():
                 _ccards.set_active(_uid, "default_feiyu", _pcache)
                 try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
                 except Exception: pass
-                await e.reply(f"{_px('✅')} 已切回默认角色卡(大肥鱼)", parse_mode="HTML")
+                await e.reply(f"{_px('✅')} 已切回默认角色卡(鲸萝莉)", parse_mode="HTML")
             elif _cmd == "delete":
                 if not _arg:
                     await e.reply("用法: <code>/character delete id</code>", parse_mode="HTML"); return
@@ -13311,27 +13311,12 @@ async def main():
         except Exception as _ce:
             await e.reply(f"character err: {_ce}")
 
-    @client.on(events.NewMessage(incoming=True, pattern=r"^/daughter$"))
-    async def _(e):
-        """🐠 一键切换到「活泼女儿」人格"""
-        try:
-            _uid = e.sender_id
-            ok = _ccards.set_active(_uid, "daughter_nv", _pcache)
-            if ok:
-                try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
-                except Exception: pass
-                await e.reply("🐠 好呀爸爸！人家现在是你的小鱼儿啦~ 以后学到好玩的都跑来跟你说！😆")
-            else:
-                await e.reply("❌ 女儿人格卡加载失败", parse_mode="HTML")
-        except Exception as _de:
-            await e.reply(f"daughter err: {_de}")
-
     @client.on(events.NewMessage(incoming=True, pattern=r"^/loli$"))
     async def _(e):
-        """🐳 一键切换到「鲸萝莉」人格(CETACEA_LOLI)"""
+        """🐳 一键切回「鲸萝莉」人格(默认人格)"""
         try:
             _uid = e.sender_id
-            ok = _ccards.set_active(_uid, "cetacea_loli", _pcache)
+            ok = _ccards.set_active(_uid, "default_feiyu", _pcache)
             if ok:
                 try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
                 except Exception: pass
@@ -15181,7 +15166,7 @@ async def main():
         # === 角色卡注入 (2026-10-25): 用户激活的角色卡 persona 覆盖默认人设 ===
         try:
             _card = _ccards.get_active(u, _pcache)
-            if _card and _card.get("id") != "default_feiyu":
+            if _card:
                 _card_persona = _ccards.render_persona(_card)
                 sp += ("\n===角色卡(当前激活, 覆盖默认人设)===" + _card_persona +
                        "\n(以上是你当前扮演的角色, 名字/性格/说话风格/背景以此为准; "
