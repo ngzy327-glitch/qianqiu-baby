@@ -9983,11 +9983,14 @@ def rt(n,a,chat_id=None,uid=None):
                         return "voice clone: 需要 text 参数"
                     if not _sname:
                         return "voice clone: 需要 sample 参数(样本名, 用 list_samples 查看)"
+                    # CPU 推理慢: 文本太长会非常慢, 限制 80 字
+                    if len(_ct) > 80:
+                        return f"⚠️ 克隆文本太长({len(_ct)}字, CPU推理慢), 请用80字以内的短句试试。"
                     _cpath = _veng.generate_with_clone(_ct, _sname, prompt_text=_ptext)
                     if not _cpath:
                         return f"❌ 克隆失败: 样本不存在或 CosyVoice 未安装。状态: {_veng.cosyvoice_status()}"
                     _pending_files.setdefault(_cid, []).append(_cpath)
-                    return f"🎭 声纹克隆语音已发送\n· 样本: {_sname}\n· 字数: {len(_ct)}"
+                    return f"🎭 声纹克隆语音已发送\n· 样本: {_sname}\n· 字数: {len(_ct)}\n· 提示: CPU推理较慢, 短句约10-60秒"
                 if act=="sample":
                     _sname = (a.get("name") or "").strip()
                     _spath = (a.get("path") or "").strip()

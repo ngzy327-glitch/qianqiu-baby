@@ -191,10 +191,16 @@ def _cosyvoice_available() -> bool:
         _cosy_init_err = "cosyvoice 未安装"
         return False
     try:
+        import torch
+        # CPU 全开: 用满所有核心加速推理(无GPU服务器关键)
+        try:
+            torch.set_num_threads(max(1, os.cpu_count() or 1))
+        except Exception:
+            pass
         from cosyvoice.cli.cosyvoice import CosyVoice2
-        _cosy_model = CosyVoice2('iic/CosyVoice2-0.5B')
+        _cosy_model = CosyVoice2('iic/CosyVoice2-0.5B', load_jit=False)
         _cosy_loaded = True
-        print("[voice] CosyVoice 克隆引擎已加载", flush=True)
+        print(f"[voice] CosyVoice2 已加载 (sample_rate={_cosy_model.sample_rate}, threads={torch.get_num_threads()})", flush=True)
         return True
     except Exception as e:
         _cosy_loaded = True
@@ -262,9 +268,10 @@ def generate_with_clone(text: str, sample_name: str, prompt_text: str = "") -> s
         import torch
         # 正确签名: inference_zero_shot(tts_text, prompt_text, prompt_wav, ...)
         speech_chunks = []
-        for chunk in _cosy_model.inference_zero_shot(
-                _clean, prompt_text or "", wav_path, stream=False):
-            speech_chunks.append(chunk['tts_speech'])
+        with torch.inference_mode():
+            for chunk in _cosy_model.inference_zero_shot(
+                    _clean, prompt_text or "", wav_path, stream=False):
+                speech_chunks.append(chunk['tts_speech'])
         if not speech_chunks:
             print("[voice] 克隆失败: 模型无输出", flush=True)
             return ""
