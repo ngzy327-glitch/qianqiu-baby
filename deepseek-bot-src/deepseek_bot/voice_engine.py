@@ -164,24 +164,38 @@ def generate(text: str, voice: str = "", rate: str = "+0%", pitch: str = "+0Hz")
 _cosy_loaded = False
 _cosy_model = None
 _cosy_init_err = ""
+_cosy_installed = None  # None=未检测, True/False=是否装了包
+
+
+def _cosyvoice_installed() -> bool:
+    """只检测 cosyvoice 包是否安装(不加载模型, 不下载)"""
+    global _cosy_installed
+    if _cosy_installed is not None:
+        return _cosy_installed
+    try:
+        from cosyvoice.cli.cosyvoice import CosyVoice2  # noqa: F401
+        import torch  # noqa: F401
+        _cosy_installed = True
+    except ImportError:
+        _cosy_installed = False
+    return _cosy_installed
 
 
 def _cosyvoice_available() -> bool:
-    """检测 CosyVoice 是否可用"""
+    """检测 CosyVoice 模型是否已加载可用(首次调用会下载模型~1GB)"""
     global _cosy_loaded, _cosy_model, _cosy_init_err
     if _cosy_loaded:
         return _cosy_model is not None
+    if not _cosyvoice_installed():
+        _cosy_loaded = True
+        _cosy_init_err = "cosyvoice 未安装"
+        return False
     try:
         from cosyvoice.cli.cosyvoice import CosyVoice2
-        import torch
         _cosy_model = CosyVoice2('CosyVoice2-0.5B')
         _cosy_loaded = True
         print("[voice] CosyVoice 克隆引擎已加载", flush=True)
         return True
-    except ImportError:
-        _cosy_loaded = True
-        _cosy_init_err = "cosyvoice 未安装"
-        return False
     except Exception as e:
         _cosy_loaded = True
         _cosy_init_err = str(e)[:200]
@@ -191,14 +205,45 @@ def _cosyvoice_available() -> bool:
 
 def cosyvoice_status() -> str:
     """返回 CosyVoice 状态(给 /voice 命令展示用)"""
-    if _cosyvoice_available():
+    if _cosy_loaded and _cosy_model is not None:
         return "✅ 已就绪(可用声纹克隆)"
-    return f"❌ 不可用({_cosy_init_err or '未安装'})。安装: pip install cosyvoice torch torchaudio"
+    if _cosyvoice_installed():
+        return f"⏳ 已安装, 首次克隆时自动下载模型(~1GB)。状态: {_cosy_init_err or '待加载'}"
+    return f"❌ 未安装。安装: pip install cosyvoice torch torchaudio (需~2GB)"
 
 
-def generate_with_clone(text: str, sample_name: str) -> str:
+def _ensure_wav(audio_path: str) -> str:
+    """把音频转成 24kHz 单声道 wav(CosyVoice 需要)。
+    Telegram 语音是 ogg/opus, 必须先转 wav。
+    返回 wav 路径, 失败返回空串。
+    """
+    src = Path(audio_path)
+    if not src.exists():
+        return ""
+    if src.suffix.lower() == '.wav':
+        return str(src)
+    wav_path = TTS_DIR / f"conv_{src.stem}_{int(time.time() * 1000)}.wav"
+    try:
+        import subprocess
+        r = subprocess.run(
+            ['ffmpeg', '-y', '-i', str(src), '-ar', '24000', '-ac', '1',
+             '-acodec', 'pcm_s16le', str(wav_path)],
+            capture_output=True, timeout=120)
+        if r.returncode == 0 and wav_path.exists() and wav_path.stat().st_size > 0:
+            return str(wav_path)
+        print(f"[voice] ffmpeg 转码失败: {r.stderr.decode()[:300]}", flush=True)
+    except FileNotFoundError:
+        print("[voice] ffmpeg 未安装, 无法转码 ogg→wav", flush=True)
+    except Exception as e:
+        print(f"[voice] 转 wav 失败: {e}", flush=True)
+    return ""
+
+
+def generate_with_clone(text: str, sample_name: str, prompt_text: str = "") -> str:
     """用已保存的语音样本做声纹克隆 TTS。失败返回空串。
-    sample_name: save_sample 时用的名字
+    text: 要说的话
+    sample_name: save_sample 时用的样本名
+    prompt_text: 样本音频的文字内容(可选, 提供后克隆质量更高; 不填用空串)
     """
     if not _cosyvoice_available():
         return ""
@@ -210,15 +255,23 @@ def generate_with_clone(text: str, sample_name: str) -> str:
         _clean = _preprocess_for_tts(text)
         if not _clean.strip():
             return ""
+        # Telegram 语音是 ogg, 必须转 wav
+        wav_path = _ensure_wav(sample_path)
+        if not wav_path:
+            return ""
         import torch
-        out = TTS_DIR / f"clone_{int(time.time()*1000)}.wav"
-        # CosyVoice 推理(零样本克隆)
-        for i, chunk in enumerate(_cosy_model.inference_zero_shot(
-            _clean, sample_path, _clean, stream=False)):
-            pass
-        # 保存音频
+        # 正确签名: inference_zero_shot(tts_text, prompt_text, prompt_wav, ...)
+        speech_chunks = []
+        for chunk in _cosy_model.inference_zero_shot(
+                _clean, prompt_text or "", wav_path, stream=False):
+            speech_chunks.append(chunk['tts_speech'])
+        if not speech_chunks:
+            print("[voice] 克隆失败: 模型无输出", flush=True)
+            return ""
         import torchaudio
-        torchaudio.save(str(out), chunk['tts_speech'], 22050)
+        full_speech = torch.cat(speech_chunks, dim=1)
+        out = TTS_DIR / f"clone_{int(time.time() * 1000)}.wav"
+        torchaudio.save(str(out), full_speech.cpu(), _cosy_model.sample_rate)
         if out.exists() and out.stat().st_size > 0:
             return str(out)
         return ""
