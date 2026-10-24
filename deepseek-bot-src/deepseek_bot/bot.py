@@ -13326,6 +13326,21 @@ async def main():
         except Exception as _de:
             await e.reply(f"daughter err: {_de}")
 
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/loli$"))
+    async def _(e):
+        """🐳 一键切换到「鲸萝莉」人格(CETACEA_LOLI)"""
+        try:
+            _uid = e.sender_id
+            ok = _ccards.set_active(_uid, "cetacea_loli", _pcache)
+            if ok:
+                try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                except Exception: pass
+                await e.reply("🐳 主人~人家现在是你的鲸萝莉啦，主人说什么人家都听~")
+            else:
+                await e.reply("❌ 鲸萝莉人格卡加载失败", parse_mode="HTML")
+        except Exception as _le:
+            await e.reply(f"loli err: {_le}")
+
     @client.on(events.NewMessage(incoming=True, pattern=r"^/memory(?:\s+(\S+))?$"))
     async def _(e):
         """🧠 记忆模式: /memory [full|condensed] 切换全量/压缩记忆"""

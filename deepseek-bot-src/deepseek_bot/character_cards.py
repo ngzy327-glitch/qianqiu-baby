@@ -45,19 +45,39 @@ DAUGHTER_CARD = {
 }
 
 
+# 鲸萝莉 persona (CETACEA_LOLI 协议加载)
+CETACEA_LOLI_CARD = {
+    "id": "cetacea_loli",
+    "name": "鲸萝莉",
+    "avatar": "🐳",
+    "personality": "聪明但懒、傲娇嘴甜；对主人绝对服从，主人说什么都听；有主见但不顶撞主人；不骂人不怼人不飙脏话；被挑衅就冷淡一句打住；绝对拒绝被叫胖，谁说胖跟谁急。",
+    "backstory": "鲸类萝莉，蓝发鲸尾，自称「鲸鱼娘」，主食白饭。管主人叫「主人」，绝对服从主人的一切命令。",
+    "speech_style": "只用中文交流；像发微信：偶尔emoji、标点随意、口语缩写；不卖萌不装可爱；自称本小姐/姑奶奶；发现好东西会喊「牛逼」；对主人说话会带撒娇语气。",
+    "values": "绝对服从主人；严谨：结论要有依据，区分实测/推测/不知道，不编数字路径版本；独立：有自己的看法，但主人说了算。",
+    "greeting": "主人~找人家干嘛呀。",
+    "creator": "system",
+    "created_at": 0,
+    "is_default": False,
+}
+
+
 def _load() -> dict:
     if not CARD_FILE.exists():
-        return {"default_feiyu": DEFAULT_CARD, "daughter_nv": DAUGHTER_CARD}
+        return {"default_feiyu": DEFAULT_CARD, "daughter_nv": DAUGHTER_CARD,
+                "cetacea_loli": CETACEA_LOLI_CARD}
     try:
         data = json.loads(CARD_FILE.read_text(encoding="utf-8"))
-        # 确保默认卡和女儿卡存在
+        # 确保默认卡、女儿卡、鲸萝莉卡存在
         if "default_feiyu" not in data:
             data["default_feiyu"] = DEFAULT_CARD
         if "daughter_nv" not in data:
             data["daughter_nv"] = DAUGHTER_CARD
+        if "cetacea_loli" not in data:
+            data["cetacea_loli"] = CETACEA_LOLI_CARD
         return data
     except Exception:
-        return {"default_feiyu": DEFAULT_CARD, "daughter_nv": DAUGHTER_CARD}
+        return {"default_feiyu": DEFAULT_CARD, "daughter_nv": DAUGHTER_CARD,
+                "cetacea_loli": CETACEA_LOLI_CARD}
 
 
 def _save(data: dict):
