@@ -2840,17 +2840,10 @@ TOOL_LABELS = {
     "group_memory": "👥 群聊记忆",
 }
 
-# 用户思考过程偏好 {uid: bool}，私聊默认关（开启后才显示 💭 思考行）
+# 用户思考过程偏好 {uid: bool}——已永久关闭, 不再加载历史配置
 _thinking_pref = {}
-# 2026-09-30 补: /thinking 命令里调用了 _tp_save() 但全文件从未定义 → 一执行就 NameError 崩,
-#   回复发不出、偏好也不落盘(重启即回默认)。这里补 落盘/加载 一套。
 _tp_f = Path("/opt/deepseek-bot/thinking_pref.json")
-try:
-    if _tp_f.exists():
-        _thinking_pref.update({int(k): bool(v) for k, v in
-                               json.loads(_tp_f.read_text(encoding="utf-8")).items()})
-except Exception:
-    pass
+# 历史配置一律忽略(硬编码 _show_rc=False, 此字典不再被读取)
 
 
 def _tp_save():
@@ -2886,21 +2879,14 @@ except: pass
 # 2026-09-22 老板「不是让你加心跳」: 撤销我自作主张塞的那条占位消息。
 #   心跳保持**只有开/关两档, 默认关**(关掉=一条状态消息都不发, 也不会有"先发 ⌛️ 再等 0.8 秒"那种东西);
 #   任务进行中用户看到的是 TG 自带的「正在输入…」+ 正文流式时末尾那个**会动的** ⌛️ 光标。
-_hb_switch = {}   # chat_id -> True=显示心跳 / False=不显示(默认关)
+_hb_switch = {}   # 心跳已永久关闭, 不再加载历史配置
 _HB_F = Path("/opt/deepseek-bot/hb_switch.json")
-try:
-    if _HB_F.exists():
-        _hb_switch.update({int(k): v for k, v in json.loads(_HB_F.read_text(encoding="utf-8")).items()})
-except Exception:
-    pass
+# 历史配置一律忽略(_hb_on() 硬编码返回 False, 此字典不再被读取)
 
 
 def _hb_on(chat_id):
-    """这条聊天要不要显示心跳(默认不显示)"""
-    try:
-        return bool(_hb_switch.get(int(chat_id), False))
-    except Exception:
-        return False
+    """心跳(⌛️ 思考中…常驻消息)——用户要求永久关闭, 任何配置都不显示。"""
+    return False
 
 
 _typewriter_switch = {}  # /typeshow 打字机(快速分块呈现)开关: chat_id -> True=呈现 / False=直接发完整(默认开)
@@ -13771,23 +13757,8 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/hbshow\s*(on|off)?"))
     async def _(e):
-        # 2026-09-21 心跳开关(默认关): 那条「⌛️ 思考中… / ◐ 处理中… 第N轮」常驻刷新消息
-        u = e.sender_id
-        if u not in OK:
-            await e.reply(f"{_px('❌')} 仅管理员可切换", parse_mode="HTML")
-            return
-        arg = e.pattern_match.group(1)
-        if arg == "on":
-            _hb_switch[e.chat_id] = True
-            await e.reply(f"{_px('⌛️')} 心跳消息：显示", parse_mode="HTML")
-        elif arg == "off":
-            _hb_switch[e.chat_id] = False
-            await e.reply(f"{_px('🚫')} 心跳消息：不显示(停任务发「停止」)", parse_mode="HTML")
-        else:
-            _hb_switch[e.chat_id] = not _hb_switch.get(e.chat_id, False)
-            await e.reply(f"{'⌛️ 显示' if _hb_switch[e.chat_id] else '🚫 不显示'}心跳消息\n用法: /hbshow on|off", parse_mode="HTML")
-        try: _HB_F.write_text(json.dumps(_hb_switch), encoding="utf-8")
-        except: pass
+        # 心跳(⌛️ 思考中…常驻消息)已永久关闭
+        await e.reply(f"{_px('🚫')} 心跳消息已永久关闭，不会再显示「思考中…」状态。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/typeshow\s*(on|off)?"))
     async def _(e):
@@ -13940,62 +13911,16 @@ async def main():
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/thinking\s*(on|off)?"))
     async def _(e):
-        u = e.sender_id
-        arg = e.pattern_match.group(1)
-        is_grp = e.is_group
-        if is_grp:
-            # 群组：管理员可开关
-            if u not in OK:
-                await e.reply(f"{_px('❌')} 仅管理员可切换群组思考显示", parse_mode="HTML")
-                return
-            gid = e.chat_id
-            if arg == 'on':
-                _group_thinking[gid] = True
-                await e.reply(f"{_px('✅')} 群组思考过程：开启", parse_mode="HTML")
-            elif arg == 'off':
-                _group_thinking[gid] = False
-                await e.reply(f"{_px('✅')} 群组思考过程：关闭", parse_mode="HTML")
-            else:
-                cur = _group_thinking.get(gid, False)
-                _group_thinking[gid] = not cur
-                await e.reply(f"{'✅ 开启' if not cur else '❌ 关闭'}群组思考过程\n用法: /thinking on|off")
-        else:
-            # 私聊
-            if arg == 'on':
-                _thinking_pref[u] = True
-                _tp_save()
-                await e.reply(f"{_px('✅')} 思考过程：开启", parse_mode="HTML")
-            elif arg == 'off':
-                _thinking_pref[u] = False
-                _tp_save()
-                await e.reply(f"{_px('✅')} 思考过程：关闭", parse_mode="HTML")
-            else:
-                cur = _thinking_pref.get(u, True)
-                _thinking_pref[u] = not cur
-                _tp_save()
-                await e.reply(f"{'✅ 开启' if not cur else '❌ 关闭'}思考过程\n用法: /thinking on|off  /quiet /verbose")
+        # 思考过程已永久关闭(用户要求不显示 reasoning_content), 任何参数都不生效
+        await e.reply(f"{_px('🚫')} 思考过程已永久关闭，不会再显示任何思考内容。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/quiet$"))
     async def _(e):
-        u = e.sender_id
-        if e.is_group:
-            _group_thinking[e.chat_id] = False
-            await e.reply(f"{_px('🔇')} 群组思考已关闭", parse_mode="HTML")
-        else:
-            _thinking_pref[u] = False
-            _tp_save()
-            await e.reply(f"{_px('🔇')} 思考已关闭", parse_mode="HTML")
+        await e.reply(f"{_px('🔇')} 思考过程已永久关闭，无需再操作。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/verbose$"))
     async def _(e):
-        u = e.sender_id
-        if e.is_group:
-            _group_thinking[e.chat_id] = True
-            await e.reply(f"{_px('🔊')} 群组思考已开启", parse_mode="HTML")
-        else:
-            _thinking_pref[u] = True
-            _tp_save()
-            await e.reply(f"{_px('🔊')} 思考已开启", parse_mode="HTML")
+        await e.reply(f"{_px('🚫')} 思考过程已永久关闭，无法开启 verbose 模式。", parse_mode="HTML")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/(rewind|回滚|撤销)$"))
     async def _(e):
@@ -16065,8 +15990,8 @@ async def main():
                 _cur_tools = _new_tools
             except Exception:
                 pass
-            # 是否显示思考（私聊默认开，群聊默认关）
-            _show_rc = _thinking_pref.get(u, False) if not e.is_group else _group_thinking.get(e.chat_id, False)  # 2026-09-02 思考过程默认关
+            # 是否显示思考——用户要求永久关闭, 任何配置都不显示 reasoning_content
+            _show_rc = False
             # 🔧 悬空tool_calls兜底: 确认弹窗期间用户没点按钮直接回复 → m尾部是assistant.tool_calls无配对tool消息
             #    → DeepSeek 必返回 400 (tool_calls must be followed by tool messages); 补配对消息保平
             try:
