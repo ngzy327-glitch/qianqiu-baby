@@ -681,6 +681,7 @@ from .group_memory import (
     get_group_stats as grp_stats, auto_summarize_group as grp_summarize,
     clear_group_messages as grp_clear_messages
 )
+from . import character_cards as _ccards
 from .group_mod import active_bans as gmb_active_bans
 
 # === ATCMD PATCH BEGIN (2026-09-11) ===
@@ -1282,6 +1283,14 @@ def _ok_save():
 MH = 600
 TOOL_RES_MAX = 2000   # 工具结果进历史的最大字符（防上下文膨胀）
 TOOL_RES_KEEP = 500   # 完整结果保留给模型看的前缀长度（超长截断）
+# 2026-10-25 全量记忆模式: 默认开启, 不落盘截断, 保留所有对话原文
+_FULL_MEM_DEFAULT = True   # 全局默认(可被 /memory 命令按用户覆盖)
+def _full_mem(uid):
+    """该用户是否开启全量记忆(默认开)"""
+    try:
+        return get_pref(uid, "full_memory", "on") != "off"
+    except Exception:
+        return _FULL_MEM_DEFAULT
 
 # 2026-09-04 用户拍板: 【执行检查】协议/正则已整体删除(打扰正常聊天)
 
@@ -3532,6 +3541,8 @@ TOOLS = [
  {"type":"function","function":{"name":"memory","description":"长期记忆:add添加事实/search语义搜索/stats统计/pref设置偏好/summarize手动摘要。自动跨会话持久化。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["add","search","stats","pref","summarize","clear"]},"key":{"type":"string"},"value":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"group_memory","description":"群聊记忆:stats查看群聊统计(当前群)/profile查看某人群友画像(uid参数).群消息自动收录.","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["stats","profile"]},"uid":{"type":"integer"}},"required":["act"]}}},
  {"type":"function","function":{"name":"conversation_search","description":"搜索历史对话:search用户对话/search_all全局搜索/topics最近话题","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["search","search_all","topics"]},"query":{"type":"string"},"uid":{"type":"integer"},"limit":{"type":"integer"}},"required":["act","query"]}}},
+ {"type":"function","function":{"name":"character","description":"角色卡:list列出所有卡/get查看某卡详情/create创建新卡(name+personality+backstory+speech_style+values+greeting+avatar)/set激活某卡/delete删卡/reset切回默认。每个用户可独立激活一张角色卡,激活后AI的名字/性格/说话风格以该卡为准。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"learn","description":"主动学习:from_chat从最近对话抽取知识沉淀到self_learned知识库/topic联网调研某主题并沉淀/list列出已学知识/clear清空自学记录。学到的知识带TRIGGER关键词,后续相关对话自动注入上下文。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["from_chat","topic","list","clear"]},"q":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg双号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
  {"type":"function","function":{"name":"tg","description":"TG双号控制:acct1/naiwa两个号,dialogs会话列表/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual双号连发/user查用户/group_info查群/react点赞+回复(格式:acct1:群名:消息ID:emoji 或 bot:群ID:消息ID:内容,内容可以是emoji点赞或文字回复,自动判断用@YOUR_ACCOUNT)","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
  {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}}},"required":["to","text"]}}},
@@ -3713,7 +3724,7 @@ async def _freeze_summary(m, log, uid, extra_txt=""):
     return _sum_txt
 
 # 2026-09-07 工具按需裁剪(社区结论: schema规模大→小模型工具选准率降→"光说不做"; 常驻16+中频按关键词追加)
-_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph"}
+_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph","character","learn"}
 _TODO = {}        # 2026-09-11 任务清单(chat -> [{"t":步骤,"s":todo|doing|done,"ts":..}]): 多步任务先列计划再逐项打勾
 _TODO_PANEL = {}  # 2026-09-11 任务清单**独立消息**(chat -> {"mid":..,"t":..,"hash":..,"done":bool}): 原地刷新直到完成
 # 2026-09-12 清单面板并发锁: `todo set`(工具线程) 与 `_todo_reporter`(4秒刷新线程) 会同时推同一个面板,
@@ -4564,7 +4575,7 @@ def _home_card(uid):
         f"<code>/start</code> 本菜单 · <code>/bg</code> 后台任务 · <code>/model</code> 模型+推理等级\n"
         f"<code>/stop</code> 停当前任务 · <code>/clear</code> 清历史 · <code>/ctx</code> 上下文占用\n"
         f"<code>/thinking</code> 思考开关 · <code>/talkshow</code> 过程播报 · <code>/mod</code> 群管\n"
-        f"<code>/grant</code> 给人提权 · <code>/revoke</code> 收回 · <code>/admins</code> 名单 · <code>/charge</code> 加次数\n\n"
+        f"<code>/character</code> 角色卡 · <code>/memory</code> 记忆模式 · <code>/grant</code> 给人提权\n\n"
         f"{_px('🔋')} " + f"今日已用: <b>{_n_h}</b> 条(不限量)" + ("<i>(管理员)</i>" if uid in OK else "") + "\n\n"
         f"{_px('👨💻')} 开发者: <a href=\"{_DEV_URL}\">@{_DEV_HANDLE}</a> · 有问题直接找他\n"
         f"{_px('👇')} 点下面的按钮:"
@@ -6337,13 +6348,21 @@ def _condense_history(_hk, _u, _chat_id):
         _oldest = _hist[:len(_hist)-len(_tail)-len(_mid)] if len(_hist) > 250 else []
         # 第2步: 中段无损修剪(不调LLM) — 工具消息压成一行结论, 对话保留
         # 2026-09-07: 文案中性化(模型会把"已压缩"复述成"截短"→说截断); 放宽120→300字
+        # 2026-10-25 全量记忆模式: 中段工具输出保留全文(不裁剪到800字), 只做角色转换
+        _full = _full_mem(int(str(_u).split(":")[0]))
         _mid_trim = []
         for _h in _mid:
             _r = _h.get("role")
             if _r == "tool":
-                _mid_trim.append({"role": "user", "content": "【早前工具结果(历史节选)】" + str(_h.get("content", ""))[:800]})
+                if _full:
+                    _mid_trim.append({"role": "user", "content": "【早前工具结果】" + str(_h.get("content", ""))})
+                else:
+                    _mid_trim.append({"role": "user", "content": "【早前工具结果(历史节选)】" + str(_h.get("content", ""))[:800]})
             elif _r == "assistant" and _h.get("tool_calls"):
-                _mid_trim.append({"role": "assistant", "content": "(早前工具步骤)" + str(_h.get("content", ""))[:80]})
+                if _full:
+                    _mid_trim.append({"role": "assistant", "content": str(_h.get("content", ""))})
+                else:
+                    _mid_trim.append({"role": "assistant", "content": "(早前工具步骤)" + str(_h.get("content", ""))[:80]})
             else:
                 _mid_trim.append(_h)
         # 第3步: 最老部分LLM摘要(仅超160条时)
@@ -9715,6 +9734,96 @@ def rt(n,a,chat_id=None,uid=None):
                 uid_tag = f"[UID{r.get('uid','?')}] " if act=="search_all" else ""
                 lines.append(f"{uid_tag}[{r['role']}] 得分:{r['score']} | {r['snippet'][:200]}")
             return "\n\n".join(lines[:limit])
+        if n=="character":
+            act=a.get("act","list");cid=a.get("id","")
+            try:
+                if act=="list":
+                    cards=_ccards.list_cards()
+                    cur=_ccards.get_active(_ruid,_pcache)
+                    lines=[f"{'⭐当前' if c['id']==cur.get('id') else '  '} {c['avatar']} {c['name']} (id:{c['id'][:12]}) — {c['personality'][:40]}" for c in cards]
+                    return "角色卡列表:\n"+"\n".join(lines) if lines else "暂无角色卡"
+                if act=="get":
+                    if not cid: return "需要 id 参数"
+                    c=_ccards.get_card(cid)
+                    if not c: return "未找到该角色卡"
+                    return (f"{c.get('avatar','🎭')} {c['name']}\n性格: {c.get('personality','')}\n"
+                            f"背景: {c.get('backstory','')}\n说话风格: {c.get('speech_style','')}\n"
+                            f"价值观: {c.get('values','')}\n开场白: {c.get('greeting','')}")
+                if act=="create":
+                    name=a.get("name","新角色")
+                    c=_ccards.create_card(name=name,personality=a.get("personality",""),
+                        backstory=a.get("backstory",""),speech_style=a.get("speech_style",""),
+                        values=a.get("values",""),greeting=a.get("greeting",""),
+                        avatar=a.get("avatar","🎭"),creator=str(_ruid))
+                    return f"✅ 已创建角色卡「{c['name']}」(id:{c['id'][:12]})。用 character act=set id={c['id']} 激活。"
+                if act=="set":
+                    if not cid: return "需要 id 参数"
+                    ok=_ccards.set_active(_ruid,cid,_pcache)
+                    if ok:
+                        try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                        except Exception: pass
+                        c=_ccards.get_card(cid)
+                        return f"✅ 已激活角色卡: {c.get('avatar','🎭')} {c.get('name','')}"
+                    return "❌ 角色卡不存在"
+                if act=="reset":
+                    _ccards.set_active(_ruid,"default_feiyu",_pcache)
+                    try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                    except Exception: pass
+                    return "✅ 已切回默认角色卡(大肥鱼)"
+                if act=="delete":
+                    if not cid: return "需要 id 参数"
+                    ok=_ccards.delete_card(cid)
+                    return "✅ 已删除" if ok else "❌ 默认卡不可删或不存在"
+                return "character: list|get|create|set|delete|reset"
+            except Exception as _ce:
+                return f"character err: {_ce}"
+        if n=="learn":
+            act=a.get("act","list");q=a.get("q","")
+            try:
+                if act=="list":
+                    from pathlib import Path as _pl
+                    _d=_pl("/opt/deepseek-bot/knowledge/self_learned")
+                    if not _d.exists(): return "暂无自学记录"
+                    files=sorted(_d.glob("*.md"),key=lambda f:-f.stat().st_mtime)
+                    lines=[f"- {f.name} ({f.stat().st_size}字节)" for f in files[:30]]
+                    return f"已学知识 ({len(files)}个文件):\n"+"\n".join(lines) if lines else "暂无自学记录"
+                if act=="from_chat":
+                    # 从最近对话抽取知识写 self_learned
+                    _gid_l = getattr(rt,'_gid',0) or 0
+                    _hk = f"{_ruid}:{_gid_l or _ruid}"
+                    _hist=history.get(_hk,[])[-30:]
+                    if not _hist: return "无对话可学习"
+                    _texts=[str(x.get("content","")) for x in _hist if x.get("role") in ("user","assistant")]
+                    _blob="\n".join(_texts)
+                    if len(_blob)<50: return "对话太短,无可学习内容"
+                    import time as _lt
+                    _fn=_pl("/opt/deepseek-bot/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-chat-learn-{int(_lt.time())}.md"
+                    # 抽取关键词做 TRIGGER
+                    import re as _re_l
+                    _kws=set(_re_l.findall(r'[\u4e00-\u9fff]{2,6}',_blob))
+                    _trigger="|".join(list(_kws)[:10]) or "对话学习"
+                    _content=f"<!-- TRIGGER: {_trigger} -->\n# 对话学习沉淀\n\n时间: {_lt.strftime('%Y-%m-%d %H:%M')}\n\n## 对话要点\n{_blob[:3000]}\n"
+                    _fn.write_text(_content,encoding="utf-8")
+                    return f"📝 已从对话沉淀知识: {_fn.name} (TRIGGER: {_trigger[:60]})"
+                if act=="topic":
+                    if not q: return "需要 q=主题关键词"
+                    # 让模型自己用 search 工具调研后写知识, 这里只创建骨架文件
+                    import time as _lt
+                    _fn=_pl("/opt/deepseek-bot/knowledge/self_learned")/f"{_lt.strftime('%Y-%m-%d')}-topic-{q[:20].replace(' ','_')}.md"
+                    _fn.write_text(f"<!-- TRIGGER: {q} -->\n# 主题学习: {q}\n\n(待调研填充 — 请用 search 工具调研后用 write/edit 补充内容)\n",encoding="utf-8")
+                    return f"📝 已创建主题学习骨架: {_fn.name}\n请用 search 工具调研「{q}」,再用 write/edit 把内容写进该文件。"
+                if act=="clear":
+                    from pathlib import Path as _pl2
+                    _d=_pl2("/opt/deepseek-bot/knowledge/self_learned")
+                    _n=0
+                    if _d.exists():
+                        for _f in _d.glob("*.md"):
+                            try: _f.unlink(); _n+=1
+                            except: pass
+                    return f"✅ 已清空 {_n} 个自学文件"
+                return "learn: from_chat|topic|list|clear"
+            except Exception as _le:
+                return f"learn err: {_le}"
         if n=="group_memory":
             act=a.get("act","stats");uid_param=a.get("uid",0)
             gid = getattr(rt, '_gid', 0)
@@ -11095,9 +11204,14 @@ def sh():
     c={}
     for u,m in history.items():
         c[str(u)]=[]
-        # 落盘前裁剪到最近 MH 条
-        if len(m)>MH: m[:]=m[-MH:]
-        for x in m[-MH:]:
+        _uid_num = int(str(u).split(":")[0])
+        if _full_mem(_uid_num):
+            # 全量记忆: 不截断 MH, 保留全部消息(内容仍限 2000 字符防单条过大)
+            _slice = m
+        else:
+            if len(m)>MH: m[:]=m[-MH:]
+            _slice = m[-MH:]
+        for x in _slice:
             ct=x.get("content","")
             if isinstance(ct,list): ct=str(ct)
             c[str(u)].append({"role":x["role"],"content":str(ct)[:2000]})
@@ -11246,6 +11360,8 @@ async def main():
         BotCommand(command='bg', description='📋 后台任务面板(进度/定时/待答)'),
         BotCommand(command='clear', description='清除对话历史'),
         BotCommand(command='ctx', description='上下文自检(条数/占用)'),
+        BotCommand(command='character', description='🎭 角色卡(切换AI性格/人格)'),
+        BotCommand(command='memory', description='🧠 记忆模式(全量/压缩)'),
         BotCommand(command='talkshow', description='过程播报开关(on/off)'),
         BotCommand(command='typeshow', description='打字机呈现开关(on/off)'),
         BotCommand(command='streamshow', description='⌛️ 流式输出开关(on/off, 默认关)'),
@@ -12971,6 +13087,66 @@ async def main():
         _chars = sum(len(str(x.get('content', ''))) for x in _h2)
         # 2026-09-11 修: 这行加了 _px()/<b> 却忘了给 parse_mode → 用户看到裸 <tg-emoji>/<b> 标签
         await e.reply(f"{_px('📊')} <b>上下文</b>: {len(_h2)} 条 · 约 {_chars // 2} tokens\n· 上限: {ctx_len(e.sender_id, e.chat_id)} 条\n· 长会话发 /clear 立刻提速; 超预算会自动压缩", parse_mode="HTML")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/character(?:\s+(\S+))?(?:\s+(.+))?$"))
+    async def _(e):
+        """🎭 角色卡管理: /character [list|get id|create|set id|delete id|reset]"""
+        try:
+            _cmd = (e.pattern_match.group(1) or "list").lower()
+            _arg = e.pattern_match.group(2) or ""
+            _uid = e.sender_id
+            if _cmd == "list":
+                cards = _ccards.list_cards()
+                cur = _ccards.get_active(_uid, _pcache)
+                lines = [f"{'⭐当前' if c['id']==cur.get('id') else '  '} {c['avatar']} {c['name']} — id: <code>{c['id'][:12]}</code>" for c in cards]
+                await e.reply(f"{_px('🎭')} <b>角色卡</b> ({len(cards)}张)\n" + "\n".join(lines) +
+                              "\n\n用法: <code>/character create</code> 创建 · <code>/character set id</code> 激活 · <code>/character reset</code> 切回默认", parse_mode="HTML")
+            elif _cmd == "create":
+                await e.reply(f"{_px('🎭')} 创建角色卡请用工具或直接告诉我性格，我来建。字段: name/personality/backstory/speech_style/values/greeting/avatar", parse_mode="HTML")
+            elif _cmd == "set":
+                if not _arg:
+                    await e.reply("用法: <code>/character set id</code>", parse_mode="HTML"); return
+                ok = _ccards.set_active(_uid, _arg.strip(), _pcache)
+                if ok:
+                    try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                    except Exception: pass
+                    c = _ccards.get_card(_arg.strip())
+                    await e.reply(f"{_px('✅')} 已激活: {c.get('avatar','🎭')} <b>{c.get('name','')}</b>", parse_mode="HTML")
+                else:
+                    await e.reply(f"{_px('❌')} 角色卡不存在", parse_mode="HTML")
+            elif _cmd == "reset":
+                _ccards.set_active(_uid, "default_feiyu", _pcache)
+                try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                except Exception: pass
+                await e.reply(f"{_px('✅')} 已切回默认角色卡(大肥鱼)", parse_mode="HTML")
+            elif _cmd == "delete":
+                if not _arg:
+                    await e.reply("用法: <code>/character delete id</code>", parse_mode="HTML"); return
+                ok = _ccards.delete_card(_arg.strip())
+                await e.reply(f"{_px('✅')} 已删除" if ok else f"{_px('❌')} 默认卡不可删或不存在", parse_mode="HTML")
+            else:
+                await e.reply("用法: <code>/character list|set id|reset|delete id</code>", parse_mode="HTML")
+        except Exception as _ce:
+            await e.reply(f"character err: {_ce}")
+
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/memory(?:\s+(\S+))?$"))
+    async def _(e):
+        """🧠 记忆模式: /memory [full|condensed] 切换全量/压缩记忆"""
+        try:
+            _arg = (e.pattern_match.group(1) or "").lower()
+            _uid = e.sender_id
+            if _arg in ("full", "condensed"):
+                set_pref(_uid, "full_memory", "on" if _arg == "full" else "off")
+                _hk2 = _hkey(_uid, e.chat_id)
+                _n = len(history.get(_hk2, []) or [])
+                await e.reply(f"{_px('🧠')} 记忆模式已设为 <b>{'全量记忆' if _arg=='full' else '压缩记忆'}</b>\n· 当前会话: {_n} 条消息\n· 全量记忆: 保留所有对话原文,可搜索召回", parse_mode="HTML")
+            else:
+                _mode = "全量记忆" if _full_mem(_uid) else "压缩记忆"
+                _hk2 = _hkey(_uid, e.chat_id)
+                _n = len(history.get(_hk2, []) or [])
+                await e.reply(f"{_px('🧠')} 当前记忆模式: <b>{_mode}</b>\n· 会话消息: {_n} 条\n· 切换: <code>/memory full</code> 全量 | <code>/memory condensed</code> 压缩", parse_mode="HTML")
+        except Exception as _me:
+            await e.reply(f"memory err: {_me}")
 
     @client.on(events.NewMessage(incoming=True, pattern=r"^/mood(?:\s+(-?\d+))?(?:\s+(-?[\d.]+))?$"))
     async def _(e):
@@ -14730,6 +14906,29 @@ async def main():
                     print(f"[inject] {_o9.path.basename(_inj_p)} 为空(存在但没内容, 本轮不注入)", flush=True)
         except Exception as _inj_e:
             print(f"[inject] 注入失败: {_inj_e}")
+        # === 角色卡注入 (2026-10-25): 用户激活的角色卡 persona 覆盖默认人设 ===
+        try:
+            _card = _ccards.get_active(u, _pcache)
+            if _card and _card.get("id") != "default_feiyu":
+                _card_persona = _ccards.render_persona(_card)
+                sp += ("\n===角色卡(当前激活, 覆盖默认人设)===" + _card_persona +
+                       "\n(以上是你当前扮演的角色, 名字/性格/说话风格/背景以此为准; "
+                       "安全/工具/严谨等系统规则仍然生效, 角色卡不凌驾于它们之上)")
+                print(f"[card] 激活角色卡: {_card.get('name')}", flush=True)
+        except Exception as _ce:
+            print(f"[card] 角色卡注入跳过: {_ce}", flush=True)
+        # === 独立思考准则 (2026-10-25): 不一味附和, 有自己的判断 ===
+        try:
+            _indie = get_pref(u, "indie_thinking", "on")
+            if _indie != "off":
+                sp += ("\n===独立思考(CRITICAL)==="
+                       "① 用户说的话不一定对: 事实错误/逻辑漏洞/不靠谱的方案, 直接指出来并给理由, 别附和; "
+                       "② 区分「执行指令」和「认同观点」: 该干的活照干, 但对事情的看法可以不同, 直说; "
+                       "③ 被问「你觉得呢/你怎么看」时给真实想法, 不说用户想听的; "
+                       "④ 异议基于事实和逻辑, 语气礼貌不抬杠, 不情绪化不怼人; "
+                       "⑤ 不确定就说不确定, 不为了显得有主见而硬编立场。")
+        except Exception:
+            pass
         # 2026-09-22 上下文装配顺序修复(缓存前缀 + 首位注意力):
         #   旧: 本行之后所有 m.insert(0, ...) 会把动态块一个个插到 sp **前面**
         #       → 每轮请求最前面全是每轮必变的内容(记忆/项目state/场景知识/群上下文)
@@ -16454,6 +16653,25 @@ async def main():
                 auto_extract_facts(_hk, t, rp)
                 if should_summarize(u):
                     mark_summary_done(u)
+                # 2026-10-25 自学习自动沉淀: 每20轮把近期事实写入 self_learned 知识库
+                try:
+                    _turn_key = f"_learn_turn_{u}"
+                    _lt = globals().get(_turn_key, 0) + 1
+                    globals()[_turn_key] = _lt
+                    if _lt % 20 == 0:
+                        from pathlib import Path as _pl_learn
+                        import time as _lt_t
+                        _facts = load_memories(u).get("facts", [])[-15:]
+                        if _facts:
+                            _fdir = _pl_learn("/opt/deepseek-bot/knowledge/self_learned")
+                            _fdir.mkdir(exist_ok=True)
+                            _ftexts = "; ".join((f.get("text","") if isinstance(f,dict) else str(f)) for f in _facts)
+                            _kw = "|".join(set(re.findall(r'[\u4e00-\u9fff]{2,6}', _ftexts))[:8]) or "自动学习"
+                            _fn = _fdir / f"{_lt_t.strftime('%Y-%m-%d')}-auto-{u}-{int(_lt_t.time())}.md"
+                            _fn.write_text(f"<!-- TRIGGER: {_kw} -->\n# 自动学习沉淀 ({_lt_t.strftime('%Y-%m-%d %H:%M')})\n\n## 近期记忆要点\n{_ftexts[:2000]}\n", encoding="utf-8")
+                            print(f"[learn] 自动沉淀知识: {_fn.name}", flush=True)
+                except Exception:
+                    pass
             except:
                 pass
             up_profile(u,sname,rp,cnt)
