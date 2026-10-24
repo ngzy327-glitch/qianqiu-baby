@@ -35,10 +35,9 @@ def _load() -> dict:
         return {"default_feiyu": DEFAULT_CARD}
     try:
         data = json.loads(CARD_FILE.read_text(encoding="utf-8"))
-        # 确保默认卡存在
-        if "default_feiyu" not in data:
-            data["default_feiyu"] = DEFAULT_CARD
-        # 清理已废弃的系统卡(大肥鱼旧版/女儿/鲸萝莉旧id), 只保留 default_feiyu + 用户自定义卡
+        # 默认卡始终强制更新为最新 DEFAULT_CARD(修复旧版"大肥鱼"残留)
+        data["default_feiyu"] = DEFAULT_CARD
+        # 清理已废弃的系统卡, 只保留 default_feiyu + 用户自定义卡
         for _old_id in ("daughter_nv", "cetacea_loli"):
             if _old_id in data:
                 del data[_old_id]
