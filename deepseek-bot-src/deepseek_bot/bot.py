@@ -679,11 +679,91 @@ from .memory_engine import (
 from .group_memory import (
     record_message as grp_record, retrieve_group_context as grp_context,
     get_group_stats as grp_stats, auto_summarize_group as grp_summarize,
-    clear_group_messages as grp_clear_messages
+    clear_group_messages as grp_clear_messages, load_group as grp_load,
+    summarize_style as grp_summarize_style
 )
 from . import character_cards as _ccards
 from . import voice_engine as _veng
 from .group_mod import active_bans as gmb_active_bans
+
+# 2026-10-25 「学到东西来找我炫耀」: 扫所有群记忆, 提炼有趣的新发现
+def _digest_group_learnings() -> str:
+    """遍历所有群记忆文件, 汇总最近学到的东西(新事实/有趣的说话风格/热门话题)。
+    返回炫耀文案(空串表示没什么可汇报的)。"""
+    try:
+        from pathlib import Path as _pl
+        _gdir = _pl(DATA_DIR) / "group_memories"
+        if not _gdir.exists():
+            return ""
+        _files = sorted(_gdir.glob("g*.json"), key=lambda f: -f.stat().st_mtime)
+        if not _files:
+            return ""
+        # 只看最近活跃的 5 个群
+        _files = _files[:5]
+        _now = time.time()
+        _findings = []
+        _total_groups = 0
+        _total_people = 0
+        for _fp in _files:
+            try:
+                _gid = int(_fp.stem[1:])
+            except ValueError:
+                continue
+            _data = grp_load(_gid)
+            _msgs = _data.get("messages", [])
+            _profs = _data.get("profiles", {})
+            if not _msgs:
+                continue
+            _total_groups += 1
+            _total_people += len(_profs)
+            # 1. 最近的新事实(从群友画像里挑)
+            _new_facts = []
+            for _p in _profs.values():
+                for _f in _p.get("facts", [])[-3:]:
+                    _new_facts.append((_p.get("name", "?"), _f))
+            # 2. 说话风格最有特点的人(语气词多/emoji多/有口头禅)
+            _stylish = []
+            for _uid, _p in _profs.items():
+                _sty = _p.get("style") or {}
+                if _sty.get("msg_total", 0) >= 5:
+                    _score = (sum(_sty.get("particles", {}).values())
+                              + _sty.get("emoji_count", 0) * 2
+                              + len([1 for v in _sty.get("catchphrases", {}).values() if v >= 2]))
+                    if _score >= 3:
+                        _desc = grp_summarize_style(_p)
+                        if _desc:
+                            _stylish.append((_p.get("name", "?"), _score, _desc))
+            _stylish.sort(key=lambda x: -x[1])
+            # 3. 热门话题
+            _topics = _data.get("topic_tags", []) or []
+            # 组装本群发现
+            if _new_facts or _stylish or _topics:
+                _gname = str(_gid)
+                # 尝试从群名缓存取
+                try:
+                    _gn_cache = globals().get('_group_names', {})
+                    if _gid in _gn_cache:
+                        _gname = _gn_cache[_gid]
+                except: pass
+                _lines = [f"🐟 在群 {_gname}（{len(_msgs)}条消息/{len(_profs)}人）学到:"]
+                if _topics:
+                    _lines.append(f"  🔥 大伙聊: {'、'.join(_topics[:5])}")
+                if _new_facts:
+                    _lines.append(f"  📌 新情报:")
+                    for _nm, _f in _new_facts[:4]:
+                        _lines.append(f"     · {_nm}: {_f}")
+                if _stylish:
+                    _lines.append(f"  🎭 说话最有特点的人:")
+                    for _nm, _sc, _dsc in _stylish[:3]:
+                        _lines.append(f"     · {_nm} — {_dsc.replace(chr(10), ' ')}")
+                _findings.append("\n".join(_lines))
+        if not _findings:
+            return ""
+        _header = f"爸爸！我又学到新东西啦~ 😤\n（巡了 {_total_groups} 个群，观察了 {_total_people} 个人）\n\n"
+        return _header + "\n\n".join(_findings[:4]) + "\n\n怎么样，我厉害吧~ 😼"
+    except Exception as _e:
+        print(f"[showoff] digest异常: {_e}", flush=True)
+        return ""
 
 # === ATCMD PATCH BEGIN (2026-09-11) ===
 # 修「群里 /cmd@botname 没反应」: Telegram 在群聊里点命令会自动补成 "/start@YOUR_ACCOUNT",
@@ -13242,6 +13322,21 @@ async def main():
         except Exception as _ce:
             await e.reply(f"character err: {_ce}")
 
+    @client.on(events.NewMessage(incoming=True, pattern=r"^/daughter$"))
+    async def _(e):
+        """🐠 一键切换到「活泼女儿」人格"""
+        try:
+            _uid = e.sender_id
+            ok = _ccards.set_active(_uid, "daughter_nv", _pcache)
+            if ok:
+                try: PF.write_text(json.dumps(_pcache,ensure_ascii=False,indent=2),encoding="utf-8")
+                except Exception: pass
+                await e.reply("🐠 好呀爸爸！人家现在是你的小鱼儿啦~ 以后学到好玩的都跑来跟你说！😆")
+            else:
+                await e.reply("❌ 女儿人格卡加载失败", parse_mode="HTML")
+        except Exception as _de:
+            await e.reply(f"daughter err: {_de}")
+
     @client.on(events.NewMessage(incoming=True, pattern=r"^/memory(?:\s+(\S+))?$"))
     async def _(e):
         """🧠 记忆模式: /memory [full|condensed] 切换全量/压缩记忆"""
@@ -17690,6 +17785,29 @@ async def main():
             await asyncio.sleep(10)
             print(f"[alive] loop={int(time.time())} tasks={len([t for t in asyncio.all_tasks() if not t.done()])}", flush=True)
     asyncio.create_task(_hb_probe())
+
+    # 2026-10-25 「学到东西来找我炫耀」: 定期扫所有群记忆, 提炼新学到的东西, 私聊汇报主人
+    _showoff_last = {"ts": 0}  # 上次炫耀时间戳
+    async def _showoff_loop():
+        await asyncio.sleep(120)  # 启动2分钟后再开始(等bot完全就绪)
+        while True:
+            try:
+                _now = time.time()
+                # 每 6 小时炫耀一次, 且只在有新内容时
+                if _now - _showoff_last["ts"] > 21600:
+                    _report = _digest_group_learnings()
+                    if _report:
+                        try:
+                            await client.send_message(_OWNER_ID, _report)
+                            _showoff_last["ts"] = _now
+                            print(f"[showoff] 已向主人汇报所学", flush=True)
+                        except Exception as _se:
+                            print(f"[showoff] 发送失败: {_se}", flush=True)
+                await asyncio.sleep(1800)  # 每30分钟检查一次是否到点
+            except Exception as _e:
+                print(f"[showoff] 循环异常: {_e}", flush=True)
+                await asyncio.sleep(300)
+    asyncio.create_task(_showoff_loop())
     # 2026-09-05: 优雅关停——SIGTERM/SIGINT 先强制落盘再退出(防 systemctl restart 丢对话)
     def _sig_save(*_a):
         try:

@@ -20,8 +20,9 @@ if JIEBA_OK:
                  "发卡", "ACG", "FAKA", "空投", "钱包", "私钥", "合约"]:
         jieba.add_word(word)
 
-GRP_DIR = Path("/opt/deepseek-bot/group_memories")
-GRP_DIR.mkdir(exist_ok=True)
+DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
+GRP_DIR = Path(DATA_DIR) / "group_memories"
+GRP_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_GROUP_MSGS = 500      # 每组最多存500条
 MAX_MSG_LEN = 300         # 单条消息最长300字符
@@ -142,7 +143,7 @@ def _update_profile(data: dict, uid: int, name: str, text: str, uname: str = "")
     uid_str = str(uid)
     if uid_str not in profiles:
         profiles[uid_str] = {"name": name, "username": uname or "", "facts": [],
-                             "msg_count": 0, "interests": []}
+                             "msg_count": 0, "interests": [], "style": {}}
     
     profile = profiles[uid_str]
     profile["name"] = name
@@ -166,6 +167,9 @@ def _update_profile(data: dict, uid: int, name: str, text: str, uname: str = "")
             profile["facts"].append(f)
     if len(profile["facts"]) > MAX_PROFILE_FACTS:
         profile["facts"] = profile["facts"][-MAX_PROFILE_FACTS:]
+
+    # 2026-10-25 提取说话风格(口头禅/语气词/emoji习惯)
+    _update_style(profile, text)
 
 
 def _extract_interests(text: str) -> list:
@@ -222,6 +226,93 @@ def _extract_facts_from_msg(uid: int, name: str, text: str) -> list:
     return facts
 
 
+# 2026-10-25 说话风格学习
+_PARTICLES = ["啊", "哦", "嗯", "哈", "呀", "嘛", "呢", "吧", "啦", "咧", "嗷",
+              "呜", "哇", "哎", "唉", "哟", "嘿", "哼", "切", "啧", "啵", "哒",
+              "惹", "噜", "咩", "喏", "欸", "耶", "啵", "昂", "唔", "嗷呜", "嘿嘿",
+              "哈哈", "呜呜", "嘤嘤", "嘎嘎", "嘻嘻", "呼呼", "噗"]
+_EMOJI_RE = re.compile(
+    "[" "\U0001F600-\U0001F64F" "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF" "\U0001F900-\U0001F9FF"
+    "\U0001FA70-\U0001FAFF" "\u2600-\u26FF" "\u2700-\u27BF"
+    "\ufe0f" "\u200d" "]+", flags=re.UNICODE)
+
+
+def _update_style(profile: dict, text: str):
+    """提取说话风格特征: 语气词频率/emoji习惯/口头禅候选"""
+    style = profile.setdefault("style", {})
+    style.setdefault("particles", {})      # 语气词计数
+    style.setdefault("emoji_count", 0)     # 带emoji的消息数
+    style.setdefault("emoji_top", {})      # 最常用emoji
+    style.setdefault("catchphrases", {})   # 口头禅候选(短词频)
+    style.setdefault("msg_total", 0)
+    style["msg_total"] += 1
+
+    # 1. 语气词
+    for p in _PARTICLES:
+        cnt = text.count(p)
+        if cnt > 0:
+            style["particles"][p] = style["particles"].get(p, 0) + cnt
+
+    # 2. emoji
+    emos = _EMOJI_RE.findall(text)
+    if emos:
+        style["emoji_count"] += 1
+        for e in emos:
+            style["emoji_top"][e] = style["emoji_top"].get(e, 0) + 1
+
+    # 3. 口头禅候选: 2-4字中文词, 累计频率
+    cands = re.findall(r'[\u4e00-\u9fff]{2,4}', text)
+    for c in cands:
+        # 跳过太常见的无意义词
+        if c in {"的话", "一个", "什么", "怎么", "没有", "可以", "不是", "这个",
+                 "那个", "现在", "知道", "觉得", "就是", "因为", "所以", "但是",
+                 "如果", "已经", "还是", "还有", "自己", "大家", "我们", "你们",
+                 "他们", "时候", "东西", "今天", "这样", "那样", "一样", "一直"}:
+            continue
+        style["catchphrases"][c] = style["catchphrases"].get(c, 0) + 1
+
+    # 4. 裁剪: 保留 top
+    if len(style["particles"]) > 15:
+        style["particles"] = dict(sorted(style["particles"].items(),
+                                         key=lambda x: -x[1])[:15])
+    if len(style["emoji_top"]) > 10:
+        style["emoji_top"] = dict(sorted(style["emoji_top"].items(),
+                                         key=lambda x: -x[1])[:10])
+    if len(style["catchphrases"]) > 30:
+        style["catchphrases"] = dict(sorted(style["catchphrases"].items(),
+                                            key=lambda x: -x[1])[:30])
+
+
+def summarize_style(profile: dict) -> str:
+    """把画像里的 style 字段渲染成可读的风格描述(给bot学习用)"""
+    style = profile.get("style") or {}
+    if not style or style.get("msg_total", 0) < 5:
+        return ""
+    parts = []
+    # 语气词
+    if style.get("particles"):
+        top_p = sorted(style["particles"].items(), key=lambda x: -x[1])[:5]
+        parts.append("常用语气词: " + "、".join(f"{p}({c}次)" for p, c in top_p))
+    # emoji
+    if style.get("emoji_count", 0) > 0:
+        total = style.get("msg_total", 1)
+        ratio = style["emoji_count"] / total if total else 0
+        emo_desc = "爱用emoji" if ratio > 0.4 else ("偶尔用emoji" if ratio > 0.15 else "很少用emoji")
+        top_e = sorted(style.get("emoji_top", {}).items(), key=lambda x: -x[1])[:3]
+        if top_e:
+            emo_desc += "（常用: " + "".join(e for e, _ in top_e) + "）"
+        parts.append(emo_desc)
+    # 口头禅
+    if style.get("catchphrases"):
+        top_c = sorted(style["catchphrases"].items(), key=lambda x: -x[1])[:5]
+        # 只列出现>=2次的才算口头禅
+        hot = [(w, c) for w, c in top_c if c >= 2]
+        if hot:
+            parts.append("高频词: " + "、".join(f"{w}({c}次)" for w, c in hot))
+    return "\n  ".join(parts) if parts else ""
+
+
 def retrieve_group_context(gid: int, uid: int, current_msg: str) -> str:
     """
     检索群聊上下文，返回要注入系统提示的内容。
@@ -266,6 +357,10 @@ def retrieve_group_context(gid: int, uid: int, current_msg: str) -> str:
             prof_parts.append(f"兴趣: {', '.join(profile['interests'][:8])}")
         if profile.get("facts"):
             prof_parts.append(f"事实: {'; '.join(profile['facts'][:5])}")
+        # 2026-10-25 说话风格
+        _sty = summarize_style(profile)
+        if _sty:
+            prof_parts.append(f"说话风格:\n  {_sty}")
         if prof_parts:
             parts.append(f"👤 当前发言人画像({profile['name']}, 发言{profile['msg_count']}次):\n  " + "\n  ".join(prof_parts))
     
