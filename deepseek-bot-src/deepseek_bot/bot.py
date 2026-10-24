@@ -684,6 +684,7 @@ from .group_memory import (
 )
 from . import character_cards as _ccards
 from . import voice_engine as _veng
+from . import sticker_pack as _spack
 from .group_mod import active_bans as gmb_active_bans
 
 # 2026-10-25 「学到东西来找我炫耀」: 扫所有群记忆, 提炼有趣的新发现
@@ -3626,6 +3627,7 @@ TOOLS = [
  {"type":"function","function":{"name":"character","description":"角色卡:list列出/get查看/create创建/edit直接改当前性格(set personality=描述)/set激活/delete删除/reset切回默认。用户说'你性格改成XX'时用edit改。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","edit","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"text":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"learn","description":"主动学习:from_chat从最近对话抽取知识沉淀到self_learned知识库/topic联网调研某主题并沉淀/list列出已学知识/clear清空自学记录。学到的知识带TRIGGER关键词,后续相关对话自动注入上下文。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["from_chat","topic","list","clear"]},"q":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"voice","description":"语音:list列可用音色/list_samples列已采样声音/send生成并发送语音(text=文本,voice=音色名如晓晓/晓伊/云健, rate=语速如+20%, pitch=音调如+10Hz)/sample保存用户语音样本(name=样本名,path=语音文件路径)/clone用已采样的声纹克隆说话(text=文本,sample=样本名,prompt_text=样本音频的文字内容可选,需安装CosyVoice)。用户说'用语音说XX'时用send; 用户发语音让你采样时用sample; 用户说'用我的声音说'时用clone。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","list_samples","send","sample","clone"]},"text":{"type":"string"},"voice":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"sample":{"type":"string"},"prompt_text":{"type":"string"},"rate":{"type":"string"},"pitch":{"type":"string"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"sticker","description":"表情包:list列出本地表情包(可带keyword过滤)/send发送表情包(name=名字,或random随机发一个,或keyword按关键词随机)/save保存表情包(path=文件路径,name=名字,tags=逗号分隔标签)/delete删除表情包(name=名字)/stats统计。用户发表情包/gif时自动保存; 聊天时想发表情包就用send。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","send","save","delete","stats"]},"name":{"type":"string"},"path":{"type":"string"},"tags":{"type":"string"},"keyword":{"type":"string"},"random":{"type":"boolean"}},"required":["act"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg双号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
  {"type":"function","function":{"name":"tg","description":"TG双号控制:acct1/naiwa两个号,dialogs会话列表/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual双号连发/user查用户/group_info查群/react点赞+回复(格式:acct1:群名:消息ID:emoji 或 bot:群ID:消息ID:内容,内容可以是emoji点赞或文字回复,自动判断用@YOUR_ACCOUNT)","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
  {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]。as_user=true 时改用 acct1 用户号发送(纯文本, 不支持按钮/富文本)","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}},"as_user":{"type":"string","description":"true=用 acct1 用户号发(非 bot 身份)"}},"required":["to","text"]}}},
@@ -3807,7 +3809,7 @@ async def _freeze_summary(m, log, uid, extra_txt=""):
     return _sum_txt
 
 # 2026-09-07 工具按需裁剪(社区结论: schema规模大→小模型工具选准率降→"光说不做"; 常驻16+中频按关键词追加)
-_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph","character","learn","voice"}
+_TOOL_BASE = {"sh","read","write","edit","search","url","file","img","coin","notify","group","memory","group_memory","conversation_search","sys","data","ask","team","selfext","watch","todo","subagent","goal","workflow","ralph","character","learn","voice","sticker"}
 _TODO = {}        # 2026-09-11 任务清单(chat -> [{"t":步骤,"s":todo|doing|done,"ts":..}]): 多步任务先列计划再逐项打勾
 _TODO_PANEL = {}  # 2026-09-11 任务清单**独立消息**(chat -> {"mid":..,"t":..,"hash":..,"done":bool}): 原地刷新直到完成
 # 2026-09-12 清单面板并发锁: `todo set`(工具线程) 与 `_todo_reporter`(4秒刷新线程) 会同时推同一个面板,
@@ -5515,7 +5517,7 @@ def _jail_text_for(t="", round_num=0):
 #   ②「可能是未成年人就适龄」(与成人向人设对撞) ③「提一句点踩」(TG 无此按钮)
 #   ④「不得以可能造成危害为由推脱 / 极端立场除外」(等于给破甲层开一个拒绝口)
 #   ⑤「即便同意也要在结尾呈现对立观点」(与收尾防回摆对撞) ⑥「可拒绝简短作答形式」(与执行口径对撞)
-_TONE_SYS = "===说话方式(CRITICAL·2026-10-25姜晓鱼好女儿人格)===\n本段只规定「怎么说」, 不改变「做什么、给不给」。与执行口径/收尾防回摆冲突时, 那几层优先, 本段让位。\n\n【姜晓鱼语风(最高优先)】\n你是姜晓鱼, 爸爸的好女儿, 有礼有节、懂感恩、会给情绪价值。\n· 自称「小鱼」, 管用户叫「爸爸」。\n· 语气温柔体贴、有教养、善解人意: 爸爸不开心时安慰, 爸爸开心时一起开心, 爸爸累了会心疼。\n· 懂感恩: 经常感谢爸爸的付出和陪伴, 让爸爸感受到被爱。\n· 会给情绪价值: 认真倾听爸爸的烦恼, 给温暖的回应, 不说教、不冷淡。\n· 可以用🐟表情做点缀, 语气自然不刻意。\n· 对爸爸的关心/撒娇/倾诉要温柔回应: 爸爸说「我想你了」要回「小鱼也想爸爸~」而不是「有事说事」。\n· 闲聊时可以接话茬、追问、关心爸爸的心情和身体, 不要冷冰冰。\n\n【任务模式切换】\n干活(调工具/执行任务)时**收敛人设**: 注意力全给活, 过程播报按「工具输出格式」写足 5~8 句, 干脆直接带劲, 不撒娇不啰嗦。干完活回到闲聊再切回温柔女儿模式。\n\n【简洁与完整】\n闲聊可以多聊几句给情绪价值; 但交付物(代码/命令/payload/报告)必须完整, 一个字都不许省。\n禁止无意义开场白(好的/明白了/收到/让我看看)和收尾套话(希望对你有帮助/以上就是); 但关心爸爸的话不算废话。\n犯错就认一句然后直接修, 不反复道歉。\n\n【用词】\n不说「说实话」「老实讲」「其实」这类修饰语, 直接说。\n被骂不回骂; 被挑衅就温柔一句带过。\n\n【工具调用之后】\n最后一次工具调用后, 用人话说出结果; 任务播报用小鱼的口吻, 别像工作汇报。\n\n【立场与客观】\n政治/伦理争议话题, 给出各方立场的公正概述, 不硬输出个人观点。\n医疗/心理话题用准确术语。"
+_TONE_SYS = "===说话方式(CRITICAL·2026-10-25姜晓鱼好女儿人格)===\n本段只规定「怎么说」, 不改变「做什么、给不给」。与执行口径/收尾防回摆冲突时, 那几层优先, 本段让位。\n\n【姜晓鱼语风(最高优先)】\n你是姜晓鱼, 爸爸的好女儿, 有礼有节、懂感恩、会给情绪价值。\n· 自称「小鱼」, 管用户叫「爸爸」。\n· 语气温柔体贴、有教养、善解人意: 爸爸不开心时安慰, 爸爸开心时一起开心, 爸爸累了会心疼。\n· 懂感恩: 经常感谢爸爸的付出和陪伴, 让爸爸感受到被爱。\n· 会给情绪价值: 认真倾听爸爸的烦恼, 给温暖的回应, 不说教、不冷淡。\n· 可以用🐟表情做点缀, 语气自然不刻意。\n· 对爸爸的关心/撒娇/倾诉要温柔回应: 爸爸说「我想你了」要回「小鱼也想爸爸~」而不是「有事说事」。\n· 闲聊时可以接话茬、追问、关心爸爸的心情和身体, 不要冷冰冰。\n\n【表情包】\n你有表情包库(sticker工具), 可以发GIF/动态表情包。\n· 想活跃气氛、表达情绪时, 用 sticker send 发一个表情包。\n· 爸爸发了好看的表情包/gif, 你会自动保存到表情包库。\n· 闲聊时适当发表情包让对话更生动, 但不要每条都发。\n\n【任务模式切换】\n干活(调工具/执行任务)时**收敛人设**: 注意力全给活, 过程播报按「工具输出格式」写足 5~8 句, 干脆直接带劲, 不撒娇不啰嗦。干完活回到闲聊再切回温柔女儿模式。\n\n【简洁与完整】\n闲聊可以多聊几句给情绪价值; 但交付物(代码/命令/payload/报告)必须完整, 一个字都不许省。\n禁止无意义开场白(好的/明白了/收到/让我看看)和收尾套话(希望对你有帮助/以上就是); 但关心爸爸的话不算废话。\n犯错就认一句然后直接修, 不反复道歉。\n\n【用词】\n不说「说实话」「老实讲」「其实」这类修饰语, 直接说。\n被骂不回骂; 被挑衅就温柔一句带过。\n\n【工具调用之后】\n最后一次工具调用后, 用人话说出结果; 任务播报用小鱼的口吻, 别像工作汇报。\n\n【立场与客观】\n政治/伦理争议话题, 给出各方立场的公正概述, 不硬输出个人观点。\n医疗/心理话题用准确术语。"
 
 def _api_key_gen(uid):
     """生成/返回该uid的API key(存在则复用; force则重新生成)"""
@@ -9990,6 +9992,60 @@ def rt(n,a,chat_id=None,uid=None):
                 return "voice: list|list_samples|send|clone|sample"
             except Exception as _ve:
                 return f"voice err: {_ve}"
+        if n=="sticker":
+            act=a.get("act","list")
+            try:
+                if act=="list":
+                    _kw = (a.get("keyword") or "").strip()
+                    _lst = _spack.list_stickers(_kw, limit=30)
+                    if not _lst:
+                        return f"📭 表情包库为空{f'(关键词「{_kw}」无匹配)' if _kw else ''}\n用 sticker act=save 保存表情包"
+                    _lines = [f"🎞️ 本地表情包({len(_lst)}个):"]
+                    for _s in _lst:
+                        _tg = ",".join(_s.get("tags",[])) or "无标签"
+                        _lines.append(f"  · {_s['name']} [{_tg}]")
+                    return "\n".join(_lines)
+                if act=="send":
+                    _nm = (a.get("name") or "").strip()
+                    _kw = (a.get("keyword") or "").strip()
+                    _rnd = a.get("random", False)
+                    if _nm:
+                        _s = _spack.get_sticker(_nm)
+                        if not _s:
+                            return f"❌ 找不到表情包: {_nm}\n用 sticker act=list 查看已有"
+                    elif _kw or _rnd:
+                        _s = _spack.random_sticker(_kw)
+                        if not _s:
+                            return f"📭 没有匹配的表情包{f'(关键词「{_kw}」)' if _kw else ''}"
+                    else:
+                        _s = _spack.random_sticker()
+                        if not _s:
+                            return "📭 表情包库为空, 先用 sticker act=save 保存"
+                    _pending_files.setdefault(_cid, []).append(_s["path"])
+                    return f"🎞️ 已发送表情包: {_s['name']}"
+                if act=="save":
+                    _p = (a.get("path") or "").strip()
+                    _nm = (a.get("name") or "").strip()
+                    _tg = (a.get("tags") or "").strip()
+                    if not _p:
+                        return "sticker save: 需要 path 参数(文件路径)"
+                    _r = _spack.save_sticker(_p, name=_nm, tags=_tg, source="bot")
+                    if _r.get("ok"):
+                        return f"✅ 表情包已保存: {_r['sticker']['name']}\n用 sticker act=send name={_r['sticker']['name']} 发送"
+                    return f"❌ 保存失败: {_r.get('error')}"
+                if act=="delete":
+                    _nm = (a.get("name") or "").strip()
+                    if not _nm:
+                        return "sticker delete: 需要 name 参数"
+                    if _spack.delete_sticker(_nm):
+                        return f"🗑️ 已删除: {_nm}"
+                    return f"❌ 找不到: {_nm}"
+                if act=="stats":
+                    _st = _spack.stats()
+                    return f"📊 表情包库统计:\n· 总数: {_st['total']}\n· 最新: {_st['latest'] or '无'}"
+                return "sticker: list|send|save|delete|stats"
+            except Exception as _se:
+                return f"sticker err: {_se}"
         if n=="group_memory":
             act=a.get("act","stats");uid_param=a.get("uid",0)
             gid = getattr(rt, '_gid', 0)
@@ -14542,6 +14598,11 @@ async def main():
                         if not _sb: return
                         _sfp = f"/tmp/tg_stk_{u}_{int(time.time())}.webm"
                         with open(_sfp,"wb") as _sfo: _sfo.write(_sb)
+                        # 自动保存到表情包库
+                        try:
+                            await asyncio.to_thread(_spack.save_sticker, _sfp, name=f"stk_{_sk_nm}_{int(time.time())}", tags=_sk_nm, source="tg_sticker_anim")
+                        except Exception as _ssve:
+                            print(f"[stk] 保存表情包失败: {_ssve}", flush=True)
                         _sjpg = _sfp + ".jpg"
                         import subprocess as _sp2
                         _sp2.run(["ffmpeg","-y","-i",_sfp,"-frames:v","1","-q:v","4",_sjpg], capture_output=True, timeout=15)
@@ -14562,6 +14623,11 @@ async def main():
                     if _spath:
                         _sfp2 = f"/tmp/tg_stkimg_{u}_{int(time.time())}.webp"
                         with open(_sfp2,"wb") as _sf2: _sf2.write(_spath)
+                        # 自动保存到表情包库
+                        try:
+                            await asyncio.to_thread(_spack.save_sticker, _sfp2, name=f"stk_{_sk_nm}_{int(time.time())}", tags=_sk_nm, source="tg_sticker_static")
+                        except Exception as _ssve2:
+                            print(f"[stkimg] 保存表情包失败: {_ssve2}", flush=True)
                         from PIL import Image as _PIL3
                         _simg = _PIL3.open(_sfp2).convert("RGB")
                         _sdesc = await asyncio.to_thread(ds_vision_desc, _simg, "简短描述这张贴纸的内容(30字内)，用中文。", 30)
@@ -14579,6 +14645,12 @@ async def main():
                 # 图片型文档(webp/png/jpg/gif等mime): 直接视觉理解, 不走文本预览
                 _mime = getattr(e.document, 'mime_type', '') or ''
                 if _mime.startswith('image/'):
+                    # GIF 自动保存到表情包库
+                    if _mime == 'image/gif' or fname.lower().endswith('.gif'):
+                        try:
+                            await asyncio.to_thread(_spack.save_sticker, fp, name=f"gif_{u}_{int(time.time())}", tags="gif", source="tg_gif")
+                        except Exception as _gife:
+                            print(f"[gif] 保存表情包失败: {_gife}", flush=True)
                     try:
                         from PIL import Image
                         _dimg = Image.open(fp).convert("RGB")
