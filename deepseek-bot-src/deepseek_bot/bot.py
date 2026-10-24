@@ -1382,11 +1382,11 @@ def _full_mem(uid):
 
 # 2026-10-25 用户号回复: 用 acct1 用户号发消息(非 bot 身份), 仅私聊生效
 def _reply_as_user(uid):
-    """该用户是否开启「用用户号回复」模式(默认关)"""
+    """该用户是否开启「用用户号回复」模式(默认开)"""
     try:
-        return get_pref(uid, "reply_as_user", "off") == "on"
+        return get_pref(uid, "reply_as_user", "on") == "on"
     except Exception:
-        return False
+        return True
 
 # 2026-09-04 用户拍板: 【执行检查】协议/正则已整体删除(打扰正常聊天)
 

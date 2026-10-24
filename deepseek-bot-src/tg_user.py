@@ -45,7 +45,7 @@ ACCOUNTS = {
     "acct1": {
         "session": "/opt/deepseek-bot/sessions/account1.session",
         "name": "账号A",
-        "phone": "+10000000000",
+        "phone": "+8613107872760",
         "username": "@YOUR_ACCOUNT",
         "tg_id": None,
     },
@@ -119,6 +119,41 @@ async def get_client(account_name):
         print(f"ERROR: {cfg['name']} Session 未授权")
         return None, None
     return client, cfg
+
+
+async def cmd_login(account_name):
+    """交互式登录: 发验证码 → 输入 → 完成(支持二次验证密码)"""
+    cfg = ACCOUNTS.get(account_name)
+    if not cfg:
+        print(f"ERROR: 未知账号 '{account_name}'，可用: acct1 / acct2")
+        return
+    phone = cfg["phone"]
+    print(f"🔐 登录 {cfg['name']} ({phone})")
+    client = TelegramClient(cfg["session"], API_ID, API_HASH)
+    client.flood_sleep_threshold = 15
+    await client.connect()
+    if await client.is_user_authorized():
+        me = await client.get_me()
+        print(f"✅ 已登录: {getattr(me, 'first_name','')} {getattr(me, 'last_name','')} (ID:{me.id})")
+        await client.disconnect()
+        return
+    try:
+        sent = await client.send_code_request(phone)
+        print(f"📨 验证码已发送到 {phone} (type={sent.type})")
+        code = input("请输入收到的验证码: ").strip()
+        try:
+            await client.sign_in(phone, code)
+        except SessionPasswordNeededError:
+            pwd = input("该账号开启了二次验证，请输入密码: ").strip()
+            await client.sign_in(password=pwd)
+        me = await client.get_me()
+        print(f"✅ 登录成功: {getattr(me, 'first_name','')} {getattr(me, 'last_name','')} (ID:{me.id})")
+        if getattr(me, 'username', None):
+            print(f"   @{me.username}")
+    except Exception as ex:
+        print(f"❌ 登录失败: {type(ex).__name__}: {ex}")
+    finally:
+        await client.disconnect()
 
 
 async def cmd_dialogs(client, cfg, limit=20):
@@ -1380,6 +1415,12 @@ async def main():
         pass
 
     cmd = sys.argv[2].lower()
+
+    # login 命令: 交互式登录账号(发验证码→输入→完成)
+    if cmd == "login":
+        await cmd_login(account)
+        return
+
     client, cfg = await get_client(account)
     if not client:
         return
