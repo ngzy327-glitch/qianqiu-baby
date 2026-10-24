@@ -192,7 +192,7 @@ def _cosyvoice_available() -> bool:
         return False
     try:
         from cosyvoice.cli.cosyvoice import CosyVoice2
-        _cosy_model = CosyVoice2('CosyVoice2-0.5B')
+        _cosy_model = CosyVoice2('iic/CosyVoice2-0.5B')
         _cosy_loaded = True
         print("[voice] CosyVoice 克隆引擎已加载", flush=True)
         return True
