@@ -107,12 +107,28 @@ def extract_msg_text(m):
     return ''.join(out)
 
 
+def _resolve_session(cfg):
+    """配置里的 session 路径可能是仓库脱敏占位(不存在), 这时退回同目录下最新的真实 session。
+    排除 ds.session(bot 自己的 bot 会话) 和未授权的 *_ro.session。"""
+    p = cfg["session"]
+    if os.path.exists(p):
+        return p
+    import glob
+    d = os.path.dirname(p) or "."
+    cands = [x for x in glob.glob(os.path.join(d, "*.session"))
+             if os.path.basename(x) not in ("ds.session", "acct86_ro.session")]
+    if cands:
+        cands.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        return cands[0]
+    return p
+
+
 async def get_client(account_name):
     cfg = ACCOUNTS.get(account_name)
     if not cfg:
         print(f"ERROR: 未知账号 '{account_name}'，可用: acct1 / acct2")
         return None, None
-    client = TelegramClient(cfg["session"], API_ID, API_HASH)
+    client = TelegramClient(_resolve_session(cfg), API_ID, API_HASH)
     client.flood_sleep_threshold = 15  # 2026-09-08: 120→15, 防 FloodWait 静默干等120s(双号操作卡顿元凶之一)
     await client.connect()
     if not await client.is_user_authorized():
