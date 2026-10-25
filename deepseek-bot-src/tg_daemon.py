@@ -471,7 +471,11 @@ async def amain():
         while True:
             line = await loop.run_in_executor(None, sys.stdin.readline)
             if not line:
-                _log("stdin EOF, 退出")
+                # 2026-10-25: stdin 断开不再退出。拉起方(bot)的管道随时可能断, 一断就死会让
+                # bot 每 8 秒重拉一个 daemon, 每个都来不及连 Telegram 就被 EOF 干掉。
+                # 这里转为独立常驻: 继续守 8791 socket + 挂 userchat; 后续再拉起的进程会因端口被占而退出。
+                _log("stdin EOF, 转为独立常驻(仅 socket + userchat)")
+                await asyncio.Event().wait()
                 break
             line = line.strip()
             if not line:
