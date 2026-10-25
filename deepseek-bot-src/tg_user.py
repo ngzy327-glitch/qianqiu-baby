@@ -1514,31 +1514,28 @@ async def main():
 
 # ── 贴纸包管理 (2026-10-26) ─
 async def cmd_addstickers(client, cfg, pack_name):
-    """抓取并存储一个贴纸集的所有贴纸 document_id"""
+    """抓取并存储一个贴纸集的所有贴纸 (id + access_hash)"""
     try:
         from telethon.tl.functions.messages import GetStickerSetRequest
         from telethon.tl.types import InputStickerSetShortName
-        
-        # 获取贴纸集
+
         sticker_set = await client(GetStickerSetRequest(
             stickerset=InputStickerSetShortName(short_name=pack_name),
             hash=0
         ))
-        
-        # 提取所有贴纸的 document_id
-        sticker_ids = []
+
+        stickers = []
         for doc in sticker_set.documents:
-            sticker_ids.append(str(doc.id))
-        
-        # 存储到本地
+            stickers.append({"id": str(doc.id), "access_hash": str(doc.access_hash)})
+
         from deepseek_bot import sticker_pack
-        sticker_pack.add_pack(pack_name, sticker_ids)
-        
+        sticker_pack.add_pack(pack_name, stickers)
+
         print(json.dumps({
-            "ok": True, 
-            "pack": pack_name, 
-            "count": len(sticker_ids),
-            "message": f"已添加贴纸集 {pack_name}，共 {len(sticker_ids)} 张贴纸"
+            "ok": True,
+            "pack": pack_name,
+            "count": len(stickers),
+            "message": f"已添加贴纸集 {pack_name}，共 {len(stickers)} 张贴纸"
         }))
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e)}))
@@ -1547,17 +1544,21 @@ async def cmd_addstickers(client, cfg, pack_name):
 async def cmd_sendsticker(client, cfg, target, pack_name=None):
     """发送一张随机贴纸"""
     from deepseek_bot import sticker_pack
-    
-    # 获取随机贴纸 ID
-    sticker_id = sticker_pack.get_random_sticker(pack_name)
-    if not sticker_id:
+
+    sticker = sticker_pack.get_random_sticker(pack_name)
+    if not sticker:
         print(json.dumps({"ok": False, "error": "没有可用的贴纸"}))
         return
-    
+
     try:
-        # 发送贴纸
-        await client.send_file(target, file=types.Document(id=int(sticker_id), access_hash=0, file_reference=b''))
-        print(json.dumps({"ok": True, "sticker_id": sticker_id, "target": target}))
+        from telethon.tl.types import Document
+        doc = Document(
+            id=int(sticker["id"]),
+            access_hash=int(sticker["access_hash"]),
+            file_reference=b''
+        )
+        await client.send_file(target, file=doc)
+        print(json.dumps({"ok": True, "sticker_id": sticker["id"], "target": target}))
     except Exception as e:
         print(json.dumps({"ok": False, "error": str(e)}))
 

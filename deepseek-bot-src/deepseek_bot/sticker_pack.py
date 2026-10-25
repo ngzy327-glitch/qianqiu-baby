@@ -10,7 +10,8 @@ from pathlib import Path
 DATA_DIR = os.getenv("DSB_DATA_DIR", "/opt/deepseek-bot").rstrip("/")
 STICKER_FILE = Path(DATA_DIR) / "sticker_packs.json"
 
-# 本地贴纸库: pack_name -> [document_id, ...]
+# 本地贴纸库: pack_name -> [{"id": doc_id, "access_hash": hash}, ...]
+# 兼容旧格式: pack_name -> [doc_id_str, ...]
 _sticker_db = {}
 
 
@@ -61,8 +62,15 @@ def remove_pack(pack_name: str):
     return False
 
 
-def get_random_sticker(pack_name: str = None) -> str:
-    """随机返回一个贴纸的 document_id"""
+def _normalize_sticker(entry) -> dict:
+    """兼容旧格式: 旧格式是纯字符串 doc_id, 新格式是 {"id": ..., "access_hash": ...}"""
+    if isinstance(entry, dict):
+        return entry
+    return {"id": str(entry), "access_hash": "0"}
+
+
+def get_random_sticker(pack_name: str = None) -> dict:
+    """随机返回一个贴纸 {"id": doc_id, "access_hash": hash}"""
     _load()
     if pack_name:
         stickers = _sticker_db.get(pack_name, [])
@@ -72,12 +80,12 @@ def get_random_sticker(pack_name: str = None) -> str:
         for s_list in _sticker_db.values():
             all_stickers.extend(s_list)
         stickers = all_stickers
-    
+
     if not stickers:
         return None
-    
+
     import random
-    return random.choice(stickers)
+    return _normalize_sticker(random.choice(stickers))
 
 
 def stats() -> dict:
