@@ -45,7 +45,7 @@ ACCOUNTS = {
     "acct1": {
         "session": "/opt/deepseek-bot/sessions/account1.session",
         "name": "账号A",
-        "phone": "+8613107872760",
+        "phone": "+10000000000",
         "username": "@YOUR_ACCOUNT",
         "tg_id": None,
     },
@@ -108,15 +108,15 @@ def extract_msg_text(m):
 
 
 def _resolve_session(cfg):
-    """配置里的 session 路径可能是仓库脱敏占位(不存在), 这时退回同目录下最新的真实 session。
-    排除 ds.session(bot 自己的 bot 会话) 和未授权的 *_ro.session。"""
+    """配置里的 session 路径可能是不存在的占位(仓库脱敏版), 这时退回同目录下最新的真实 session。
+    排除 ds.session(bot 自己的 bot 会话) 和 -journal 文件。"""
     p = cfg["session"]
     if os.path.exists(p):
         return p
     import glob
     d = os.path.dirname(p) or "."
     cands = [x for x in glob.glob(os.path.join(d, "*.session"))
-             if os.path.basename(x) not in ("ds.session", "acct86_ro.session")]
+             if os.path.basename(x) != "ds.session"]
     if cands:
         cands.sort(key=lambda x: os.path.getmtime(x), reverse=True)
         return cands[0]
@@ -135,41 +135,6 @@ async def get_client(account_name):
         print(f"ERROR: {cfg['name']} Session 未授权")
         return None, None
     return client, cfg
-
-
-async def cmd_login(account_name):
-    """交互式登录: 发验证码 → 输入 → 完成(支持二次验证密码)"""
-    cfg = ACCOUNTS.get(account_name)
-    if not cfg:
-        print(f"ERROR: 未知账号 '{account_name}'，可用: acct1 / acct2")
-        return
-    phone = cfg["phone"]
-    print(f"🔐 登录 {cfg['name']} ({phone})")
-    client = TelegramClient(cfg["session"], API_ID, API_HASH)
-    client.flood_sleep_threshold = 15
-    await client.connect()
-    if await client.is_user_authorized():
-        me = await client.get_me()
-        print(f"✅ 已登录: {getattr(me, 'first_name','')} {getattr(me, 'last_name','')} (ID:{me.id})")
-        await client.disconnect()
-        return
-    try:
-        sent = await client.send_code_request(phone)
-        print(f"📨 验证码已发送到 {phone} (type={sent.type})")
-        code = input("请输入收到的验证码: ").strip()
-        try:
-            await client.sign_in(phone, code)
-        except SessionPasswordNeededError:
-            pwd = input("该账号开启了二次验证，请输入密码: ").strip()
-            await client.sign_in(password=pwd)
-        me = await client.get_me()
-        print(f"✅ 登录成功: {getattr(me, 'first_name','')} {getattr(me, 'last_name','')} (ID:{me.id})")
-        if getattr(me, 'username', None):
-            print(f"   @{me.username}")
-    except Exception as ex:
-        print(f"❌ 登录失败: {type(ex).__name__}: {ex}")
-    finally:
-        await client.disconnect()
 
 
 async def cmd_dialogs(client, cfg, limit=20):
@@ -1431,12 +1396,6 @@ async def main():
         pass
 
     cmd = sys.argv[2].lower()
-
-    # login 命令: 交互式登录账号(发验证码→输入→完成)
-    if cmd == "login":
-        await cmd_login(account)
-        return
-
     client, cfg = await get_client(account)
     if not client:
         return
@@ -1533,6 +1492,13 @@ async def main():
             msg_id = int(sys.argv[4])
             emoji = sys.argv[5] if len(sys.argv) > 5 else "👍"
             await cmd_react(client, cfg, target, msg_id, emoji)
+        elif cmd == "addstickers":
+            pack_name = sys.argv[3]
+            await cmd_addstickers(client, cfg, pack_name)
+        elif cmd == "sendsticker":
+            target = sys.argv[3]
+            pack_name = sys.argv[4] if len(sys.argv) > 4 else None
+            await cmd_sendsticker(client, cfg, target, pack_name)
         else:
             print(f"未知操作 '{cmd}'")
             print("可用: dialogs messages send user search stats whois members join react")
@@ -1544,6 +1510,56 @@ async def main():
             print(f"ERROR: {_e}")
     finally:
         await client.disconnect()
+
+
+# ── 贴纸包管理 (2026-10-26) ─
+async def cmd_addstickers(client, cfg, pack_name):
+    """抓取并存储一个贴纸集的所有贴纸 document_id"""
+    try:
+        from telethon.tl.functions.messages import GetStickerSetRequest
+        from telethon.tl.types import InputStickerSetShortName
+        
+        # 获取贴纸集
+        sticker_set = await client(GetStickerSetRequest(
+            stickerset=InputStickerSetShortName(short_name=pack_name),
+            hash=0
+        ))
+        
+        # 提取所有贴纸的 document_id
+        sticker_ids = []
+        for doc in sticker_set.documents:
+            sticker_ids.append(str(doc.id))
+        
+        # 存储到本地
+        from deepseek_bot import sticker_pack
+        sticker_pack.add_pack(pack_name, sticker_ids)
+        
+        print(json.dumps({
+            "ok": True, 
+            "pack": pack_name, 
+            "count": len(sticker_ids),
+            "message": f"已添加贴纸集 {pack_name}，共 {len(sticker_ids)} 张贴纸"
+        }))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
+
+
+async def cmd_sendsticker(client, cfg, target, pack_name=None):
+    """发送一张随机贴纸"""
+    from deepseek_bot import sticker_pack
+    
+    # 获取随机贴纸 ID
+    sticker_id = sticker_pack.get_random_sticker(pack_name)
+    if not sticker_id:
+        print(json.dumps({"ok": False, "error": "没有可用的贴纸"}))
+        return
+    
+    try:
+        # 发送贴纸
+        await client.send_file(target, file=types.Document(id=int(sticker_id), access_hash=0, file_reference=b''))
+        print(json.dumps({"ok": True, "sticker_id": sticker_id, "target": target}))
+    except Exception as e:
+        print(json.dumps({"ok": False, "error": str(e)}))
 
 
 if __name__ == "__main__":
