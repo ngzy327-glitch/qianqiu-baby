@@ -52,15 +52,26 @@ def _resp_line(obj):
     sys.__stdout__.flush()
 
 
+_LOCK_FD = None
+
+
 def _acquire_single():
-    """fcntl 单实例锁(防双 daemon 并发踩 session 文件导致 database is locked)"""
+    """fcntl 单实例锁(防双 daemon 并发踩 session 文件导致 database is locked)
+
+    2026-10-25 修复: 锁文件句柄必须全局持有。原来 _f 是局部变量, 函数一返回就被回收,
+    fd 关闭 → flock 自动释放 → 锁形同虚设, 结果同时跑起两个 daemon, 两个进程用同一个
+    session 连 Telegram, 互相把对方踢下线(日志刷 Server closed the connection)。
+    """
+    global _LOCK_FD
     try:
         import fcntl
         _f = open("/tmp/tg_daemon.lock", "w")
         try:
             fcntl.flock(_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            _f.close()
             return False
+        _LOCK_FD = _f
         try:
             with open("/tmp/tg_daemon.pid", "w") as pf:
                 pf.write(str(os.getpid()))
@@ -364,7 +375,12 @@ async def _uc_setup():
     """在 daemon 的 acct1 长连接上挂 NewMessage 监听"""
     if _uc_hooked.get("acct1"):
         return
-    c, _cfg = await _get_client("acct1")
+    _log("userchat 准备挂监听 acct1 ...")
+    try:
+        c, _cfg = await asyncio.wait_for(_get_client("acct1"), timeout=60)
+    except Exception as _ce:
+        _log("userchat 连接超时: %s: %s" % (type(_ce).__name__, _ce))
+        return
     if c is None:
         _log("userchat 未启用: acct1 未登录/连接失败(先跑 tg_user.py acct1 login)")
         return
@@ -427,17 +443,29 @@ async def _sock_client(reader, writer):
             pass
 
 
+async def _uc_loop():
+    """后台挂 userchat 监听: 不阻塞 stdin 请求循环; 连接失败/未登录时每 60s 重试"""
+    while True:
+        try:
+            await _uc_setup()
+        except Exception as _ue:
+            _log("userchat setup 异常: %s: %s" % (type(_ue).__name__, _ue))
+        if _uc_hooked.get("acct1"):
+            return
+        await asyncio.sleep(60)
+
+
 async def amain():
     _log("tg_daemon 启动 pid=%s py=%s" % (os.getpid(), sys.executable))
     try:
         _srv = await asyncio.start_server(_sock_client, "127.0.0.1", 8791)
         _log("本地 socket 已监听 127.0.0.1:8791")
     except Exception as _se2:
-        _log("socket 监听失败: %s" % _se2)
-    try:
-        await _uc_setup()
-    except Exception as _ue:
-        _log("userchat setup 异常: %s: %s" % (type(_ue).__name__, _ue))
+        # 8791 已被别的 daemon 占用 → 本进程没有存在意义, 直接退出(否则会残留一个僵尸 daemon 抢 session)
+        _log("socket 监听失败: %s (端口被占用, 本进程退出)" % _se2)
+        return
+    # userchat 挂监听放后台任务: 它内部要连 Telegram, 可能卡很久, 绝不能挡住 requests 循环
+    asyncio.create_task(_uc_loop())
     loop = asyncio.get_running_loop()
     try:
         while True:
