@@ -49,7 +49,6 @@ def save_sticker(file_path: str, name: str = "", tags: str = "", source: str = "
     if not fname.endswith(ext):
         fname += ext
     dst = STICKER_DIR / fname
-    # 重名处理
     n = 1
     while dst.exists():
         dst = STICKER_DIR / f"{Path(fname).stem}_{n}{ext}"
@@ -72,7 +71,6 @@ def save_sticker(file_path: str, name: str = "", tags: str = "", source: str = "
 
 
 def list_stickers(keyword: str = "", limit: int = 50) -> list:
-    """列出表情包, 可按关键词过滤(匹配 name/tags)"""
     idx = _load_index()
     if keyword:
         kw = keyword.lower()
@@ -83,12 +81,10 @@ def list_stickers(keyword: str = "", limit: int = 50) -> list:
 
 
 def get_sticker(name_or_id: str) -> dict | None:
-    """按名字取一个表情包"""
     idx = _load_index()
     for s in idx:
         if s.get("name") == name_or_id or s.get("path", "").endswith(name_or_id):
             return s
-    # 模糊匹配
     for s in idx:
         if name_or_id.lower() in s.get("name", "").lower():
             return s
@@ -96,7 +92,6 @@ def get_sticker(name_or_id: str) -> dict | None:
 
 
 def random_sticker(keyword: str = "") -> dict | None:
-    """随机取一个表情包, 可带关键词过滤"""
     pool = list_stickers(keyword, limit=1000)
     if not pool:
         return None
@@ -104,7 +99,6 @@ def random_sticker(keyword: str = "") -> dict | None:
 
 
 def delete_sticker(name: str) -> bool:
-    """删除一个表情包"""
     idx = _load_index()
     new_idx = []
     removed = False
@@ -123,7 +117,6 @@ def delete_sticker(name: str) -> bool:
 
 
 def stats() -> dict:
-    """统计信息"""
     idx = _load_index()
     return {
         "total": len(idx),
