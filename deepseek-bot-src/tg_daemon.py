@@ -204,6 +204,8 @@ _uc_hist = {}
 _uc_seen = set()
 _uc_persona = {"txt": "", "at": 0.0}
 _uc_hooked = {"acct1": False}
+_uc_count = {}          # chat_id -> 累计有效消息数(用于节流: 每 N 条回一次)
+_UC_REPLY_EVERY = int(os.getenv("DSB_USERCHAT_EVERY", "5"))   # 每收到 N 条才回一条, 避免刷屏/太密
 
 
 def _uc_env():
@@ -343,6 +345,14 @@ async def _uc_on_msg(client, event):
         _uc_seen.add(k)
         if len(_uc_seen) > 5000:
             _uc_seen.clear()
+
+        # 节流: 每个会话累计有效消息数, 每凑够 _UC_REPLY_EVERY 条才回复一条, 避免消息太密刷屏。
+        _n = _uc_count.get(chat_id, 0) + 1
+        _uc_count[chat_id] = _n
+        if _n % _UC_REPLY_EVERY != 0:
+            return
+        if len(_uc_count) > 500:
+            _uc_count.clear()
 
         hist = _uc_hist.setdefault(str(chat_id), [])
         mt = int(cfg.get("max_turns", 20))
