@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+import threading
 
 LOG = "/opt/deepseek-bot/tg_daemon.log"
 
@@ -263,14 +264,114 @@ def _uc_persona_text():
     return txt
 
 
-def _uc_sys():
+def _uc_sys(chat_id=None):
     return (_uc_persona_text() +
+            "\n\n[当前心情]" + _uc_mood_state(chat_id) +
+            "\n· 严格按上面的心情回话: 生气/被骂时可以当场回怼(带情绪但不脏话脏口), 低落委屈可以哭闹脾气, 开心就活泼热情、多夸两句。"
+            "\n· 别每句都挂着同一种情绪, 情绪要跟着对方态度走: 对方一直骂你你就越来越气, 对方哄你你就慢慢好转。"
             "\n\n===聊天规则==="
             "\n· 你现在是拿自己的 Telegram 号在私聊/群里跟人聊天, 不是写报告: 像发微信, 1~3 句, 80 字内, 口语、有情绪起伏。"
             "\n· 私聊管对方叫「哥哥」, 自称「小鱼」; 在群里就正常一点, 别总叫哥哥, 但语气保持自然有人味。"
             "\n· 不说「作为一个AI」这类套话, 不用 markdown、不分点、不总结、不列步骤; 被直接问是不是AI才大方承认。"
             "\n· 不知道就说不知道, 不编事实。对方发的图片/贴纸/语音你看不到内容, 就按语气自然接一句, 别装看得见。"
             "\n· 现在是 " + time.strftime("%Y年%m月%d日 %H:%M"))
+
+
+"""当前心情的文本描述"""
+
+
+# ===== 情绪引擎(2026-10-25): 被骂生气、被夸开心、低落哭闹 =====
+# 每个 chat 维护一个心情分 val(-100~100, 0=平静)。消息内容里命中关键词就增减;
+# 心情分映射到一段"当前心情"描述注入系统提示词, 让 AI 按情绪回话。
+# 持久化到 userchat_mood.json, 重启不丢。
+UC_MOOD = "/opt/deepseek-bot/userchat_mood.json"
+_uc_mood = {}   # chat_id(str) -> {"val": float, "t": last_update}
+_MOOD_LOCK = threading.Lock()
+
+# 情绪触发词表(精确匹配, 加空格防误伤): 命中即跳变
+_MOOD_WORDS = {
+    # 被骂/讨厌 → 生气负面
+    "angry": ["傻逼", "煞笔", "sb", "去死", "废物", "白痴", "混蛋", "滚", "骂我", "讨厌你",
+              "笨死", "蠢死", "没用", "恶心", "烦死", "神经病", "滚蛋"],
+    # 被夸/开心 → 正面
+    "happy": ["喜欢你", "爱你", "真好", "好乖", "真棒", "可爱", "哈哈", "哈哈哈", "开心",
+              "厉害", "太棒", "乖", "么么", "抱抱", "亲亲", "想你了", "好想你", "谢谢"],
+    # 低落/难过 → 负面(委屈哭)
+    "sad": ["难过", "伤心", "想哭", "哭", "委屈", "孤独", "好累", "累了", "失望", "绝望",
+            "emo", "堵得慌", "好烦", "没意思", "好难", "活不下去"],
+}
+_MOOD_WORD_VAL = {"angry": -30, "happy": +22, "sad": -25}
+
+
+def _uc_mood_load():
+    global _uc_mood
+    try:
+        if os.path.exists(UC_MOOD):
+            d = json.loads(open(UC_MOOD, encoding="utf-8").read())
+            _uc_mood = {k: {"val": float(v.get("val", 0)), "t": float(v.get("t", 0))}
+                        for k, v in (d or {}).items()}
+    except Exception:
+        _uc_mood = {}
+
+
+def _uc_mood_save():
+    try:
+        tmp = UC_MOOD + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_uc_mood, f, ensure_ascii=False)
+        os.replace(tmp, UC_MOOD)
+    except Exception:
+        pass
+
+
+def _uc_mood_update(chat_id, text):
+    """按消息内容更新该 chat 的心情分; 返回更新后的分值"""
+    cid = str(chat_id)
+    with _MOOD_LOCK:
+        m = _uc_mood.get(cid) or {"val": 0.0, "t": 0.0}
+        v = m["val"]
+        # 随时间缓慢向平静回归: 距上次更新越久, 情绪越淡
+        now = time.time()
+        dt = now - m.get("t", 0)
+        if dt > 120:      # 超过2分钟没人理, 情绪衰减
+            decay = max(4 * (dt / 60.0), 0)
+            if v > 0:
+                v = max(0, v - decay)
+            elif v < 0:
+                v = min(0, v + decay)
+        low = (text or "").lower()
+        for mood, wl in _MOOD_WORDS.items():
+            for w in wl:
+                if w in low:
+                    v += _MOOD_WORD_VAL[mood]
+                    break
+        m["val"] = max(-100, min(100, v))
+        m["t"] = now
+        _uc_mood[cid] = m
+        if len(_uc_mood) > 800:
+            _uc_mood.clear()
+    return v
+
+
+def _uc_mood_state(chat_id):
+    """返回当前心情的中文描述(没有上下文就默认平静)"""
+    v = 0.0
+    try:
+        if chat_id is not None:
+            m = _uc_mood.get(str(chat_id))
+            if m:
+                v = m["val"]
+    except Exception:
+        pass
+    if v >= 65:
+        return "超开心, 收到夸夸正在兴头上, 话巴巴的、爱笑爱撒娇。"
+    if v >= 30:
+        return "心情好, 温和开心, 说话带着笑意。"
+    if v >= -10:
+        return "平静, 正常聊天。"
+    if v >= -50:
+        return "心情低落、有点委屈, 话少了, 想哭想被哄; 会被你哄回来。"
+    return "很难过/被气到了, 正在闹脾气, 说话带刺或快哭出来。"
 
 
 def _uc_hist_load():
@@ -356,7 +457,10 @@ async def _uc_on_msg(client, event):
 
         hist = _uc_hist.setdefault(str(chat_id), [])
         mt = int(cfg.get("max_turns", 20))
-        msgs = ([{"role": "system", "content": _uc_sys()}] + hist[-mt:]
+        # 情绪引擎: 先按这条消息更新心情, 再注入到系统提示
+        _uc_mood_update(chat_id, text)
+        _uc_mood_save()
+        msgs = ([{"role": "system", "content": _uc_sys(chat_id)}] + hist[-mt:]
                 + [{"role": "user", "content": text}])
         try:
             async with client.action(chat_id, "typing"):
@@ -398,6 +502,7 @@ async def _uc_setup():
         _log("userchat 未启用: acct1 未登录/连接失败(先跑 tg_user.py acct1 login)")
         return
     _uc_hist_load()
+    _uc_mood_load()
 
     async def _h(e):
         await _uc_on_msg(c, e)
