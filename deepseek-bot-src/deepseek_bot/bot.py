@@ -3561,7 +3561,7 @@ TOOLS = [
  {"type":"function","function":{"name":"character","description":"角色卡:list列出/get查看/create创建/edit直接改当前性格(set personality=描述)/set激活/delete删除/reset切回默认。用户说'你性格改成XX'时用edit改。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","get","create","edit","set","delete","reset"]},"id":{"type":"string"},"name":{"type":"string"},"personality":{"type":"string"},"text":{"type":"string"},"backstory":{"type":"string"},"speech_style":{"type":"string"},"values":{"type":"string"},"greeting":{"type":"string"},"avatar":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"learn","description":"主动学习:from_chat从最近对话抽取知识沉淀到self_learned知识库/topic联网调研某主题并沉淀/list列出已学知识/clear清空自学记录。学到的知识带TRIGGER关键词,后续相关对话自动注入上下文。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["from_chat","topic","list","clear"]},"q":{"type":"string"}},"required":["act"]}}},
  {"type":"function","function":{"name":"voice","description":"语音:list列可用音色/list_samples列已采样声音/send生成并发送语音(text=文本,voice=音色名如晓晓/晓伊/云健, rate=语速如+20%, pitch=音调如+10Hz)/sample保存用户语音样本(name=样本名,path=语音文件路径)/clone用已采样的声纹克隆说话(text=文本,sample=样本名,需安装CosyVoice)。用户说'用语音说XX'时用send; 用户发语音让你采样时用sample; 用户说'用我的声音说'时用clone。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","list_samples","send","sample","clone"]},"text":{"type":"string"},"voice":{"type":"string"},"name":{"type":"string"},"path":{"type":"string"},"sample":{"type":"string"},"rate":{"type":"string"},"pitch":{"type":"string"}},"required":["act"]}}},
- {"type":"function","function":{"name":"sticker","description":"表情包:list列出本地表情包(可带keyword过滤)/send发送表情包(name=名字,或random随机,或keyword按关键词随机)/save保存表情包(path=文件路径,name=名字,tags=逗号分隔标签)/delete删除(name=名字)/stats统计。用户发表情包/gif时自动保存;聊天时想活跃气氛就用send发一个。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","send","save","delete","stats"]},"name":{"type":"string"},"path":{"type":"string"},"tags":{"type":"string"},"keyword":{"type":"string"},"random":{"type":"boolean"}},"required":["act"]}}},
+ {"type":"function","function":{"name":"sticker","description":"表情包:list列出本地表情包(可带keyword过滤)/send发送表情包(name=名字,或random随机,或keyword按关键词随机)/save保存表情包(path=文件路径,name=名字,tags=逗号分隔标签)/delete删除(name=名字)/cleanup清理库里不是表情包的文件/stats统计。用户发表情包/gif时自动保存;聊天时想活跃气氛就用send发一个。","parameters":{"type":"object","properties":{"act":{"type":"string","enum":["list","send","save","delete","cleanup","stats"]},"name":{"type":"string"},"path":{"type":"string"},"tags":{"type":"string"},"keyword":{"type":"string"},"random":{"type":"boolean"}},"required":["act"]}}},
  {"type":"function","function":{"name":"whois","description":"查TG用户名→用户ID(主账号秒查,别用tg双号绕路): name=用户名(带不带@都行,如 your_account)","parameters":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}},
  {"type":"function","function":{"name":"tg","description":"TG双号控制:acct1/naiwa两个号,dialogs会话列表/messages读消息/send发消息/search搜索/stats统计/whois排行/members成员/join加群/dual双号连发/user查用户/group_info查群/react点赞+回复(格式:acct1:群名:消息ID:emoji 或 bot:群ID:消息ID:内容,内容可以是emoji点赞或文字回复,自动判断用@YOUR_ACCOUNT)","parameters":{"type":"object","properties":{"act":{"type":"string"},"tgt":{"type":"string"}},"required":["act","tgt"]}}},
  {"type":"function","function":{"name":"notify","description":"发 TG 消息(Bot API)。buttons=inline 按钮, 每内层数组是一行。两种写法: ①[['文字','callback_data']] ②带链接/颜色的 [{'text':'支付 XXX USDT','url':'https://...','style':'success','icon':'💳'}] (style=primary/success/danger, 收款链接必须用 url 按钮让用户直接点)。要发收款按钮: 先用 paylink 拿 url, 再用本工具 buttons=[{'text':'支付 xx USDT','url':链接,'style':'success','icon':'💳'}]。as_user=true 时改用 acct1 用户号发送(纯文本, 不支持按钮/富文本)","parameters":{"type":"object","properties":{"to":{"type":"integer","description":"目标 chat_id(群为负数)"},"text":{"type":"string"},"buttons":{"type":"array","description":"inline 按钮, 每内层数组=一行; 元素可 ['文字','callback_data'] 或 {'text','url','style','icon'}","items":{"type":"array","items":{}}},"as_user":{"type":"string","description":"true=用 acct1 用户号发(非 bot 身份)"}},"required":["to","text"]}}},
@@ -9975,7 +9975,10 @@ def rt(n,a,chat_id=None,uid=None):
                 if act=="stats":
                     _st = _spack.stats()
                     return f"📊 表情包库统计:\n· 总数: {_st['total']}\n· 最新: {_st['latest'] or '无'}"
-                return "sticker: list|send|save|delete|stats"
+                if act=="cleanup":
+                    _r = _spack.cleanup()
+                    return f"🧹 已清理 {_r['removed']} 个非表情包条目, 剩 {_r['left']} 个"
+                return "sticker: list|send|save|delete|stats|cleanup"
             except Exception as _se:
                 return f"sticker err: {_se}"
         if n=="group_memory":
@@ -14579,12 +14582,20 @@ async def main():
                 # 图片型文档(webp/png/jpg/gif等mime): 直接视觉理解, 不走文本预览
                 _mime = getattr(e.document, 'mime_type', '') or ''
                 if _mime.startswith('image/'):
-                    # GIF 自动保存到表情包库
-                    if _mime == 'image/gif' or fname.lower().endswith('.gif'):
+                    # GIF 自动保存到表情包库(2026-10-25: 只收真动画, 静态图/普通图片一律不收)
+                    if _mime == 'image/gif' and fname.lower().endswith('.gif'):
+                        _real_gif = False
                         try:
-                            await asyncio.to_thread(_spack.save_sticker, fp, name=f"gif_{u}_{int(time.time())}", tags="gif", source="tg_gif")
-                        except Exception as _gife:
-                            print(f"[gif] 保存表情包失败: {_gife}", flush=True)
+                            from PIL import Image as _PILGif
+                            with _PILGif.open(fp) as _gi:
+                                _real_gif = int(getattr(_gi, "n_frames", 1) or 1) > 1
+                        except Exception:
+                            _real_gif = False
+                        if _real_gif:
+                            try:
+                                await asyncio.to_thread(_spack.save_sticker, fp, name=f"gif_{u}_{int(time.time())}", tags="gif", source="tg_gif")
+                            except Exception as _gife:
+                                print(f"[gif] 保存表情包失败: {_gife}", flush=True)
                     try:
                         from PIL import Image
                         _dimg = Image.open(fp).convert("RGB")

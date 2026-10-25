@@ -184,6 +184,201 @@ async def _get_client(account):
     return c, cfg
 
 
+# ===== 2026-10-25 用户号自动聊天 =====
+# 目标: acct1(+8613107872760) 这个"人"收到私聊 → 调模型 → 用同一个号回, 全程不经过 bot 账号。
+# 为什么塞进 daemon: session 文件只能一个长连接持有, 另起进程必 database is locked。
+UC_FILE = "/opt/deepseek-bot/userchat.json"
+UC_HIST = "/opt/deepseek-bot/userchat_history.json"
+_uc_hist = {}
+_uc_seen = set()
+_uc_persona = {"txt": "", "at": 0.0}
+_uc_hooked = {"acct1": False}
+
+
+def _uc_env():
+    """补 .env(daemon 若被单独拉起, systemd 的 EnvironmentFile 不一定继承到)"""
+    try:
+        p = "/opt/deepseek-bot/.env"
+        if not os.path.exists(p):
+            return
+        for ln in open(p, encoding="utf-8", errors="replace"):
+            ln = ln.strip()
+            if not ln or ln.startswith("#") or "=" not in ln:
+                continue
+            k, v = ln.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+
+
+_uc_env()
+
+
+def _uc_cfg():
+    d = {"on": True, "group_ids": [], "ignore_ids": [], "max_turns": 20}
+    try:
+        if os.path.exists(UC_FILE):
+            d.update(json.loads(open(UC_FILE, encoding="utf-8").read()) or {})
+    except Exception:
+        pass
+    return d
+
+
+def _uc_persona_text():
+    if _uc_persona["txt"] and time.time() - _uc_persona["at"] < 60:
+        return _uc_persona["txt"]
+    txt = ""
+    try:
+        import importlib.util
+        for p in ("/opt/deepseek-bot/deepseek_bot/character_cards.py",
+                  os.path.join(os.path.dirname(os.path.abspath(__file__)), "deepseek_bot", "character_cards.py")):
+            if os.path.exists(p):
+                spec = importlib.util.spec_from_file_location("_uc_ccards", p)
+                m = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(m)
+                txt = m.render_persona(m.DEFAULT_CARD)
+                break
+    except Exception as e:
+        _log("userchat 角色卡加载失败: %s" % e)
+    if not txt:
+        txt = "你是 🐟 姜晓鱼(小鱼), 哥哥的AI妹妹: 日常温和话少, 正事果断不话痨, 管对方叫「哥哥」, 自称「小鱼」。"
+    _uc_persona["txt"] = txt
+    _uc_persona["at"] = time.time()
+    return txt
+
+
+def _uc_sys():
+    return (_uc_persona_text() +
+            "\n\n===聊天规则==="
+            "\n· 你现在是拿自己的 Telegram 号在私聊里跟人聊天, 不是写报告: 像发微信, 1~3 句, 80 字内, 口语、有情绪起伏。"
+            "\n· 管对方叫「哥哥」, 自称「小鱼」。"
+            "\n· 不说「作为一个AI」这类套话, 不用 markdown、不分点、不总结、不列步骤; 被直接问是不是AI才大方承认。"
+            "\n· 不知道就说不知道, 不编事实。对方发的图片/贴纸/语音你看不到内容, 就按语气自然接一句, 别装看得见。"
+            "\n· 现在是 " + time.strftime("%Y年%m月%d日 %H:%M"))
+
+
+def _uc_hist_load():
+    global _uc_hist
+    try:
+        if os.path.exists(UC_HIST):
+            _uc_hist = json.loads(open(UC_HIST, encoding="utf-8").read()) or {}
+    except Exception:
+        _uc_hist = {}
+
+
+def _uc_hist_save():
+    try:
+        tmp = UC_HIST + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_uc_hist, f, ensure_ascii=False)
+        os.replace(tmp, UC_HIST)
+    except Exception:
+        pass
+
+
+async def _uc_ask(msgs):
+    import httpx
+    api = (os.getenv("DEEPSEEK_API") or os.getenv("DEEPSEEK_API_BASE")
+           or "https://api.deepseek.com/v1").rstrip("/")
+    key = os.getenv("DEEPSEEK_API_KEY", "")
+    if not key:
+        return "ERROR: 缺 DEEPSEEK_API_KEY"
+    model = os.getenv("DSB_USERCHAT_MODEL", "deepseek-flash")
+    async with httpx.AsyncClient(timeout=60) as c:
+        r = await c.post(api + "/chat/completions",
+                         headers={"Authorization": "Bearer " + key},
+                         json={"model": model, "messages": msgs,
+                               "temperature": 0.9, "max_tokens": 400})
+        r.raise_for_status()
+        j = r.json()
+        return (j["choices"][0]["message"].get("content") or "").strip()
+
+
+async def _uc_on_msg(client, event):
+    try:
+        cfg = _uc_cfg()
+        if not cfg.get("on", True):
+            return
+        if getattr(event, "out", False):
+            return
+        chat_id = event.chat_id
+        if chat_id == 777000:   # Telegram 官方服务号, 不回
+            return
+        try:
+            if chat_id in set(cfg.get("ignore_ids") or []):
+                return
+        except Exception:
+            pass
+        if getattr(event, "is_group", False):
+            if chat_id not in set(cfg.get("group_ids") or []):
+                return
+        sender = await event.get_sender()
+        if sender is None or getattr(sender, "bot", False):
+            return
+        text = (getattr(event, "raw_text", "") or "").strip()
+        if not text or text.startswith("/"):
+            return
+        if len(text) > 600:
+            text = text[:600]
+        k = (chat_id, event.id)
+        if k in _uc_seen:
+            return
+        _uc_seen.add(k)
+        if len(_uc_seen) > 5000:
+            _uc_seen.clear()
+
+        hist = _uc_hist.setdefault(str(chat_id), [])
+        mt = int(cfg.get("max_turns", 20))
+        msgs = ([{"role": "system", "content": _uc_sys()}] + hist[-mt:]
+                + [{"role": "user", "content": text}])
+        try:
+            async with client.action(chat_id, "typing"):
+                ans = await _uc_ask(msgs)
+        except Exception as e:
+            _log("userchat 生成失败 chat=%s: %s: %s" % (chat_id, type(e).__name__, e))
+            return
+        if not ans or ans.startswith("ERROR"):
+            _log("userchat 空回复 chat=%s: %s" % (chat_id, str(ans)[:120]))
+            return
+        if ans.startswith("作为") or ans.startswith("AI"):
+            ans = "哈哈，这个有意思"
+        try:
+            await event.reply(ans)
+        except Exception as e:
+            _log("userchat 发送失败 chat=%s: %s" % (chat_id, e))
+            return
+        hist.append({"role": "user", "content": text})
+        hist.append({"role": "assistant", "content": ans})
+        if len(hist) > mt * 2:
+            del hist[:len(hist) - mt * 2]
+        _uc_hist_save()
+        _log("userchat 已回 chat=%s len=%d" % (chat_id, len(ans)))
+    except Exception as e:
+        _log("userchat 异常: %s: %s" % (type(e).__name__, e))
+
+
+async def _uc_setup():
+    """在 daemon 的 acct1 长连接上挂 NewMessage 监听"""
+    if _uc_hooked.get("acct1"):
+        return
+    c, _cfg = await _get_client("acct1")
+    if c is None:
+        _log("userchat 未启用: acct1 未登录/连接失败(先跑 tg_user.py acct1 login)")
+        return
+    _uc_hist_load()
+
+    async def _h(e):
+        await _uc_on_msg(c, e)
+
+    from telethon import events as _ev
+    c.add_event_handler(_h, _ev.NewMessage(incoming=True))
+    _uc_hooked["acct1"] = True
+    _log("userchat 已监听 acct1 私聊")
+
+
 async def handle(req):
     account = str(req.get("account", "acct1")).lower()
     act = str(req.get("act", "")).lower()
@@ -239,6 +434,10 @@ async def amain():
         _log("本地 socket 已监听 127.0.0.1:8791")
     except Exception as _se2:
         _log("socket 监听失败: %s" % _se2)
+    try:
+        await _uc_setup()
+    except Exception as _ue:
+        _log("userchat setup 异常: %s: %s" % (type(_ue).__name__, _ue))
     loop = asyncio.get_running_loop()
     try:
         while True:
