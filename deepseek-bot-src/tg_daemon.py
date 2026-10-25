@@ -264,8 +264,8 @@ def _uc_persona_text():
 def _uc_sys():
     return (_uc_persona_text() +
             "\n\n===聊天规则==="
-            "\n· 你现在是拿自己的 Telegram 号在私聊里跟人聊天, 不是写报告: 像发微信, 1~3 句, 80 字内, 口语、有情绪起伏。"
-            "\n· 管对方叫「哥哥」, 自称「小鱼」。"
+            "\n· 你现在是拿自己的 Telegram 号在私聊/群里跟人聊天, 不是写报告: 像发微信, 1~3 句, 80 字内, 口语、有情绪起伏。"
+            "\n· 私聊管对方叫「哥哥」, 自称「小鱼」; 在群里就正常一点, 别总叫哥哥, 但语气保持自然有人味。"
             "\n· 不说「作为一个AI」这类套话, 不用 markdown、不分点、不总结、不列步骤; 被直接问是不是AI才大方承认。"
             "\n· 不知道就说不知道, 不编事实。对方发的图片/贴纸/语音你看不到内容, 就按语气自然接一句, 别装看得见。"
             "\n· 现在是 " + time.strftime("%Y年%m月%d日 %H:%M"))
@@ -323,8 +323,11 @@ async def _uc_on_msg(client, event):
                 return
         except Exception:
             pass
+        # 群聊默认也监听回复(所有聊天都要回)。group_ids 改为「只回这些群」的可选白名单,
+        # 空 = 全部群都回; 不想回的群用 ignore_ids 屏蔽。
         if getattr(event, "is_group", False):
-            if chat_id not in set(cfg.get("group_ids") or []):
+            _wl = set(cfg.get("group_ids") or [])
+            if _wl and chat_id not in _wl:
                 return
         sender = await event.get_sender()
         if sender is None or getattr(sender, "bot", False):
