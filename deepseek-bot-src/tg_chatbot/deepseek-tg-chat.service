@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram DeepSeek Chat Bot (Lin Oriha)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tg-chatbot
+EnvironmentFile=/opt/tg-chatbot/.env
+ExecStart=/usr/bin/python3 /opt/tg-chatbot/bot.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

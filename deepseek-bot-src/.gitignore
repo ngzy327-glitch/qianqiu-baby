@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 node_modules/
 miniapp-src/dist/
+tg_chatbot/data/
