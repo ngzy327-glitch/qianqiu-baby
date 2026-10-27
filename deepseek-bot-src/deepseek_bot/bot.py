@@ -1,5 +1,5 @@
 """NFTNB Bot v4 - Agent with persistence, playbook, reports, scheduler"""
-import asyncio, json, os, re, subprocess, time, threading, signal, select, html, hashlib, hmac, random
+import asyncio, json, os, re, subprocess, time, threading, signal, select, html, hashlib, random
 from pathlib import Path
 import httpx
 from telethon import TelegramClient, events, Button
@@ -20,7 +20,8 @@ def _kill_own_procs(uid):
     for _k in (uid, str(uid)):
         try:
             _ent = _running_procs.get(_k)
-        except Exception:
+        except Exception as _e:
+            print(f"[kill] 读进程记录失败 uid={uid}: {_e}", flush=True)
             _ent = None
         if not _ent:
             continue
@@ -28,15 +29,16 @@ def _kill_own_procs(uid):
             _p_, _pg_ = _ent
             try:
                 os.killpg(_pg_, signal.SIGKILL)
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"[kill] killpg 失败 pgid={_pg_}: {_e}", flush=True)
             try:
                 _p_.kill()
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"[kill] process.kill 失败: {_e}", flush=True)
             _running_procs.pop(_k, None)
             return True
-        except Exception:
+        except Exception as _e:
+            print(f"[kill] 处理进程记录失败 uid={uid}: {_e}", flush=True)
             return False
     return False
 
@@ -47,11 +49,10 @@ def _global_killswitch():
         subprocess.run("bash /opt/deepseek-bot/killswitch.sh", shell=True,
                        capture_output=True, timeout=5)
         return True
-    except Exception:
+    except Exception as _e:
+        print(f"[killswitch] 全局硬杀失败: {_e}", flush=True)
         return False
 
-
-from PIL import Image
 
 # ===== 原生 Chat Action (MTProto 直发当前bot，不走HTTP) =====
 from telethon.tl.functions.messages import SetTypingRequest
@@ -235,8 +236,8 @@ def bot_send_http(chat_id, text: str, buttons=None, parse_mode="", ephemeral=Non
             _ob = _topic_fill(_ob, "sendMessage")
             _outbox_add(chat_id, _ob)
             print(f"[flood] chat={chat_id} 限流中 → 已入待发队列(解禁后自动补发)", flush=True)
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[flood] chat={chat_id} 入待发队列失败: {_e}", flush=True)
         return 0 if _want_mid else "flood-limited"
     # 2026-09-14 配额闸: 每个聊天每分钟最多 N 条新消息(心跳/面板/播报都算), 超了进待发队列下分钟补
     if (not critical) and (not _gov_allow(chat_id, "new")):
@@ -249,8 +250,8 @@ def bot_send_http(chat_id, text: str, buttons=None, parse_mode="", ephemeral=Non
             if reply_to:
                 _ob2["reply_parameters"] = {"message_id": reply_to}
             _outbox_add(chat_id, _topic_fill(_ob2, "sendMessage"))
-        except Exception:
-            pass
+        except Exception as _e:
+            print(f"[quota] chat={chat_id} 入待发队列失败: {_e}", flush=True)
         return 0 if _want_mid else "quota-queued"
     # 2026-09-14 防限流①: 同一聊天的新消息保持间隔(私聊1条/秒, 群3秒/条)
     _send_wait_sync(chat_id, max_wait)
